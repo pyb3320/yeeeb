@@ -53,18 +53,6 @@ header[data-testid="stHeader"] { height:0 !important; background:transparent; }
 """, unsafe_allow_html=True)
 
 
-with st.expander("Google Sheets 연결 상태", expanded=False):
-    if st.button("연결 다시 테스트", key="sheet_test"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
-    diag = get_sheet_diagnostic()
-    if diag.get("ok"):
-        st.success(f"연결 성공: {diag.get('title')}")
-        st.caption(diag.get("url"))
-    else:
-        st.error(diag.get("error", "연결 실패"))
-
 
 def _as_dict(value: Any) -> dict:
     try:
@@ -147,6 +135,7 @@ def ensure_worksheets(sh):
 
 def get_spreadsheet():
     """코드에 지정된 Google Spreadsheet를 열고 필요한 탭을 준비합니다."""
+    from gspread.exceptions import APIError
     gc = get_google_client()
 
     url = SPREADSHEET_URL.strip()
@@ -270,7 +259,8 @@ def save_submission(payload:dict):
             "활동지4": f"선택 형태 {payload.get('structure','표')} · 직접 작성완료율",
         }
         for key,title in ACTIVITY_SHEETS.items():
-            get_or_create_ws(sh,title,cols=8).append_row([now,sid,name,f'{ {"활동지1":p["activity1"],"활동지2":p["activity2"],"활동지3":p["activity3"],"활동지4":p["activity4"]}[key] }%',"제출",detail[key]], value_input_option="USER_ENTERED")
+            pct_map = {"활동지1": p["activity1"], "활동지2": p["activity2"], "활동지3": p["activity3"], "활동지4": p["activity4"]}
+            get_or_create_ws(sh, title, cols=8).append_row([now, sid, name, f'{pct_map[key]}%', "제출", detail[key]], value_input_option="USER_ENTERED")
         return True, "제출 및 저장이 완료되었습니다.", p
     except Exception as exc:
         return False, f"Google Sheets 저장 오류: {exc}", p
@@ -308,6 +298,13 @@ def get_sheet_diagnostic():
         return {"ok": False, "error": str(exc), "url": SPREADSHEET_URL}
 
 
+
+
+
+# Google Sheets 연결 테스트는 로그인/제출 단계에서만 필요하므로
+# 앱 시작 시 자동으로 호출하지 않습니다.
+
+
 def empty_payload(sid,name):
     return {"grade":"1","studentId":sid,"number":sid,"name":name,"blanks":{},
             "listRows":[["아침 환기 및 창문 열기 (샘플)","매일 등교 직후 8:30 창문 개방"]],
@@ -321,6 +318,17 @@ def empty_payload(sid,name):
 # Login state
 for k, v in {"logged_in":False,"student_id":"","student_name":"","history":[],"worksheet_data":{},"loaded_history_index":0}.items():
     if k not in st.session_state: st.session_state[k]=v
+
+with st.expander("Google Sheets 연결 상태 확인", expanded=False):
+    st.caption("아래 버튼을 눌렀을 때만 Google Sheets 연결을 테스트합니다.")
+    if st.button("연결 테스트", key="sheet_test_safe", width="stretch"):
+        diag = get_sheet_diagnostic()
+        if diag.get("ok"):
+            st.success(f"연결 성공: {diag.get('title')}")
+            st.caption(diag.get("url"))
+        else:
+            st.error(diag.get("error", "연결 실패"))
+
 
 if not st.session_state.logged_in:
     st.markdown('<div class="login-card"><div class="login-title">📘 2026 서라벌 정보</div><div class="login-sub">데이터의 구조화와 분석 · 학번(4자리)과 이름으로 로그인하세요.</div></div>', unsafe_allow_html=True)
