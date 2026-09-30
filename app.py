@@ -53,6 +53,19 @@ header[data-testid="stHeader"] { height:0 !important; background:transparent; }
 """, unsafe_allow_html=True)
 
 
+with st.expander("Google Sheets 연결 상태", expanded=False):
+    if st.button("연결 다시 테스트", key="sheet_test"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+    diag = get_sheet_diagnostic()
+    if diag.get("ok"):
+        st.success(f"연결 성공: {diag.get('title')}")
+        st.caption(diag.get("url"))
+    else:
+        st.error(diag.get("error", "연결 실패"))
+
+
 def _as_dict(value: Any) -> dict:
     try:
         return dict(value)
@@ -60,7 +73,6 @@ def _as_dict(value: Any) -> dict:
         return {}
 
 
-@st.cache_resource(show_spinner=False)
 def _secret_dict(name: str) -> dict:
     try:
         return dict(st.secrets.get(name, {}))
@@ -68,10 +80,10 @@ def _secret_dict(name: str) -> dict:
         return {}
 
 
-@st.cache_resource(show_spinner=False)
 def get_google_client():
     """Google Sheets용 gspread 클라이언트를 생성합니다."""
     import gspread
+    from gspread.exceptions import APIError
     from google.oauth2.service_account import Credentials
 
     creds_info = _secret_dict("gcp_service_account")
@@ -91,10 +103,7 @@ def get_google_client():
     private_key = str(creds_info.get("private_key", ""))
     creds_info["private_key"] = private_key.replace("\\n", "\n")
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 
     try:
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
@@ -152,18 +161,36 @@ def get_spreadsheet():
 
     try:
         sh = gc.open_by_key(key)
+    except APIError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        body = getattr(getattr(exc, "response", None), "text", "")
+        detail = f"HTTP {status}" if status else "Google API 오류"
+        if body:
+            try:
+                detail += " | " + body[:700]
+            except Exception:
+                pass
+        raise RuntimeError(
+            "Google Sheets API 오류가 발생했습니다.\n\n"
+            f"서비스 계정: {service_email or '확인할 수 없음'}\n"
+            f"문서 ID: {key}\n"
+            f"세부 오류: {detail}\n\n"
+            "가장 먼저 확인할 것: Google Sheets [공유]에 위 서비스 계정 이메일이 "
+            "정확히 들어 있고 편집자 권한인지 확인하세요.\n"
+            f"연결 대상: {SPREADSHEET_URL}"
+        ) from exc
     except PermissionError as exc:
         raise RuntimeError(
             "Google Sheets 접근 권한이 없습니다.\n\n"
-            f"현재 앱이 사용하는 서비스 계정: {service_email or '확인할 수 없음'}\n\n"
-            "Google Sheets에서 [공유] → 위 서비스 계정 이메일을 추가하고 "
-            "[편집자] 권한을 주세요. 또한 Google Sheets API와 Google Drive API가 "
-            "해당 Google Cloud 프로젝트에서 사용 설정되어 있어야 합니다.\n\n"
+            f"서비스 계정: {service_email or '확인할 수 없음'}\n"
+            f"문서 ID: {key}\n\n"
+            "Google Sheets [공유]에 위 서비스 계정을 편집자로 추가했는지 확인하세요.\n"
             f"연결 대상: {SPREADSHEET_URL}"
         ) from exc
     except Exception as exc:
         raise RuntimeError(
-            f"Google Sheets 열기에 실패했습니다: {exc}\n연결 대상: {SPREADSHEET_URL}"
+            f"Google Sheets 열기에 실패했습니다: {type(exc).__name__}: {exc}\n"
+            f"연결 대상: {SPREADSHEET_URL}"
         ) from exc
 
     try:
@@ -211,10 +238,11 @@ def calculate_percentages(payload:dict) -> dict:
 
 
 def save_submission(payload:dict):
-    sh = get_spreadsheet()
     p = calculate_percentages(payload)
-    if sh is None:
-        return False, "Google Sheets 연결에 실패했습니다.", p
+    try:
+        sh = get_spreadsheet()
+    except Exception as exc:
+        return False, str(exc), p
     try:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sid = str(payload.get("studentId", "")).strip()
@@ -249,8 +277,11 @@ def save_submission(payload:dict):
 
 
 def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
-    sh = get_spreadsheet()
-    if sh is None: return []
+    try:
+        sh = get_spreadsheet()
+    except Exception as exc:
+        st.session_state["sheet_error"] = str(exc)
+        return []
     try:
         rows = sh.worksheet(SUBMISSION_SHEET).get_all_values()
         if len(rows)<=1: return []
@@ -266,6 +297,15 @@ def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
         return result
     except Exception:
         return []
+
+
+def get_sheet_diagnostic():
+    """UI-safe diagnostic. Does not print private keys."""
+    try:
+        sh = get_spreadsheet()
+        return {"ok": True, "title": getattr(sh, "title", ""), "url": SPREADSHEET_URL}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "url": SPREADSHEET_URL}
 
 
 def empty_payload(sid,name):
