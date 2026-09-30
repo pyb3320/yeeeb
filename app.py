@@ -1,114 +1,260 @@
 # -*- coding: utf-8 -*-
 """중학교 1학년 정보 - 데이터의 구조화와 분석 인터랙티브 활동지
 
-PDF의 A4 활동지 레이아웃을 최대한 유지하면서
-직접 입력 + 단어 드래그&드롭 + 자동채점 + Google Sheets 저장을 지원합니다.
-
-필수: Streamlit 1.51+
+학생 학번(4자리)+이름 로그인, Google Sheets 저장/불러오기,
+활동지별 퍼센트 현황, PDF와 유사한 활동지 UI를 제공합니다.
 """
+from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
+from typing import Any
+
 import streamlit as st
 
-st.set_page_config(
-    page_title="데이터의 구조화와 분석 활동지",
-    page_icon="📘",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="2026 서라벌 정보", page_icon="📘", layout="wide", initial_sidebar_state="collapsed")
 
-# Streamlit 바깥 여백을 줄여 PDF 같은 종이 레이아웃으로 보이게 함.
-st.markdown(
-    """
-    <style>
-    #MainMenu, footer { visibility:hidden; }
-    header[data-testid="stHeader"] { height:0 !important; background:transparent; }
-    .block-container { max-width:1180px !important; padding:8px 12px 24px !important; }
-    [data-testid="stAppViewContainer"] { background:#eef1f5; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-ANSWERS = {
-    "1": "데이터",
-    "2": "특성",
-    "3": "정리 및 배열",
-    "4": "통일된 모양",
-    "5": "쉽게 찾을",
-    "6": "내용 요소 간의 관계",
-    "7": "효율적으로 관리",
-    "8": "기준",
-    "9": "세로줄과 가로줄",
-    "10": "점, 선, 도형",
-    "11": "소프트웨어 개발 전문가",
-    "12": "시스템 SW 개발자",
-    "13": "운영체제 프로그래머",
-    "14": "임베디드 프로그래머",
-    "15": "응용 SW 개발자",
-    "16": "응용 SW 프로그래머",
-    "17": "네트워크 프로그래머",
-    "18": "컴퓨터 및 모바일 게임 프로그래머",
+SPREADSHEET_TITLE = "2026_서라벌_정보"
+SUBMISSION_SHEET = "제출기록"
+SUMMARY_SHEET = "학생별현황"
+ACTIVITY_SHEETS = {
+    "활동지1": "활동지1",
+    "활동지2": "활동지2",
+    "활동지3": "활동지3",
+    "활동지4": "활동지4",
 }
 
+BLANK_ANSWERS = {
+    "1":"데이터", "2":"특성", "3":"정리 및 배열", "4":"통일된 모양",
+    "5":"쉽게 찾을", "6":"내용 요소 간의 관계", "7":"효율적으로 관리",
+    "8":"기준", "9":"세로줄과 가로줄", "10":"점, 선, 도형",
+    "11":"소프트웨어 개발 전문가", "12":"시스템 SW 개발자", "13":"운영체제 프로그래머",
+    "14":"임베디드 프로그래머", "15":"응용 SW 개발자", "16":"응용 SW 프로그래머",
+    "17":"네트워크 프로그래머", "18":"컴퓨터 및 모바일 게임 프로그래머",
+}
 
-def save_to_google_sheet(payload: dict):
-    """Google Sheets Secrets가 있으면 한 행으로 저장합니다."""
+st.markdown("""
+<style>
+#MainMenu, footer { visibility:hidden; }
+header[data-testid="stHeader"] { height:0 !important; background:transparent; }
+.block-container { max-width:1180px !important; padding:8px 12px 28px !important; }
+[data-testid="stAppViewContainer"] { background:#eef1f5; }
+.login-card { background:#fff; border:1px solid #d7dfeb; border-radius:18px; padding:24px; margin:12px auto 18px; max-width:760px; box-shadow:0 8px 28px rgba(34,55,86,.08); }
+.login-title { font-size:26px; font-weight:900; color:#12233c; }
+.login-sub { color:#66758b; font-size:13px; margin-top:4px; }
+.badge-ok { display:inline-block; padding:6px 10px; border-radius:99px; background:#eaf8ef; color:#168146; font-weight:800; font-size:12px; }
+.history-card { background:#fff; border:1px solid #d7dfeb; border-radius:14px; padding:14px 16px; }
+.metric-caption { font-size:12px; color:#6e7d91; }
+.metric-value { font-size:30px; font-weight:900; color:#1b63d6; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def _as_dict(value: Any) -> dict:
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
+        return dict(value)
+    except Exception:
+        return {}
 
-        if "gcp_service_account" not in st.secrets:
-            return False, "Google 서비스 계정 Secrets가 없습니다."
-        if "google_sheet" not in st.secrets:
-            return False, "Google Sheet Secrets가 없습니다."
 
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        credentials = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=scopes
-        )
-        client = gspread.authorize(credentials)
-        spreadsheet_id = st.secrets["google_sheet"]["spreadsheet_id"]
-        worksheet_name = st.secrets["google_sheet"].get("worksheet_name", "Sheet1")
-        worksheet = client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+@st.cache_resource(show_spinner=False)
+def get_google_client():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    if "gcp_service_account" not in st.secrets:
+        return None
+    creds_info = _as_dict(st.secrets["gcp_service_account"])
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    return gspread.authorize(creds)
 
-        blanks = payload.get("blanks", {})
-        import json
-        list_rows = payload.get("listRows", [])
-        table_rows = payload.get("tableRows", [])
-        experience_list_rows = payload.get("experienceListRows", [])
-        experience_table_rows = payload.get("experienceTableRows", [])
-        experience_diagram_rows = payload.get("experienceDiagramRows", [])
-        checks = payload.get("selfChecks", {})
 
-        row = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            payload.get("grade", "1"),
-            payload.get("className", ""),
-            payload.get("number", ""),
-            payload.get("name", ""),
-            *[blanks.get(str(i), "") for i in range(1, 14)],
-            payload.get("score", 0),
-            payload.get("structure", "표"),
-            json.dumps(list_rows, ensure_ascii=False),
-            json.dumps(table_rows, ensure_ascii=False),
-            json.dumps(experience_list_rows, ensure_ascii=False),
-            json.dumps(experience_table_rows, ensure_ascii=False),
-            json.dumps(experience_diagram_rows, ensure_ascii=False),
-            json.dumps(checks, ensure_ascii=False),
-        ]
-        worksheet.append_row(row, value_input_option="USER_ENTERED")
-        return True, "Google Sheets에 저장되었습니다."
+def column_letter(n:int) -> str:
+    out=""
+    while n:
+        n, r = divmod(n-1, 26)
+        out = chr(65+r)+out
+    return out
+
+
+def get_or_create_ws(sh, title, rows=2000, cols=60):
+    try:
+        return sh.worksheet(title)
+    except Exception:
+        return sh.add_worksheet(title=title, rows=rows, cols=cols)
+
+
+def ensure_worksheets(sh):
+    headers = ["제출시각","학번","이름","활동지1_퍼센트","활동지2_퍼센트","활동지3_퍼센트","활동지4_퍼센트","전체_퍼센트","빈칸정답수","빈칸총수"]
+    headers += [f"빈칸{i}" for i in range(1,19)]
+    headers += [f"판정{i}" for i in range(1,19)]
+    headers += ["활동4_형태","payload_json"]
+    ws = get_or_create_ws(sh, SUBMISSION_SHEET, cols=len(headers)+2)
+    if ws.row_values(1) != headers:
+        ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
+    s_headers = ["학번","이름","활동지1","활동지2","활동지3","활동지4","최근제출"]
+    sw = get_or_create_ws(sh, SUMMARY_SHEET, cols=10)
+    if sw.row_values(1) != s_headers:
+        sw.update(range_name="A1:G1", values=[s_headers])
+    for title in ACTIVITY_SHEETS.values():
+        aw = get_or_create_ws(sh, title, cols=8)
+        if not aw.row_values(1):
+            aw.append_row(["제출시각","학번","이름","퍼센트","상태","세부내용"], value_input_option="USER_ENTERED")
+
+
+def get_spreadsheet():
+    gc = get_google_client()
+    if gc is None:
+        return None
+    cfg = _as_dict(st.secrets.get("google_sheet", {}))
+    try:
+        if cfg.get("spreadsheet_url"):
+            sh = gc.open_by_url(cfg["spreadsheet_url"])
+        elif cfg.get("spreadsheet_id"):
+            sh = gc.open_by_key(cfg["spreadsheet_id"])
+        else:
+            try:
+                sh = gc.open(SPREADSHEET_TITLE)
+            except Exception:
+                sh = gc.create(SPREADSHEET_TITLE)
+        if sh.title != SPREADSHEET_TITLE:
+            try: sh.update_title(SPREADSHEET_TITLE)
+            except Exception: pass
+        teacher_email = cfg.get("teacher_email", "")
+        if teacher_email:
+            try: sh.share(teacher_email, perm_type="user", role="writer", notify=False)
+            except Exception: pass
+        ensure_worksheets(sh)
+        return sh
+    except Exception:
+        return None
+
+
+def norm(v:Any) -> str:
+    return re.sub(r"\s+", "", str(v or "").strip().lower())
+
+
+def calculate_percentages(payload:dict) -> dict:
+    blanks = payload.get("blanks", {}) or {}
+    front = sum(bool(norm(blanks.get(str(i),""))) and norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) for i in range(1,11))
+    diag = sum(bool(norm(blanks.get(str(i),""))) and norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) for i in range(11,19))
+    a1 = round(front/10*100,1)
+    def completion(rows, cols):
+        rows = rows if isinstance(rows,list) else []
+        students = rows[1:] if len(rows)>1 else []
+        if not students: return 0.0
+        total = len(students)*cols
+        filled = sum(bool(str(row[c]).strip()) for row in students for c in range(cols) if c < len(row))
+        return round(filled/total*100,1)
+    a2 = completion(payload.get("listRows",[]), 2)
+    a3 = round(diag/8*100,1)
+    structure = payload.get("structure","표")
+    selected_rows = {"목록":payload.get("experienceListRows",[]), "표":payload.get("experienceTableRows",[]), "다이어그램":payload.get("experienceDiagramRows",[])}.get(structure, payload.get("experienceTableRows",[]))
+    a4 = completion(selected_rows,4)
+    return {"activity1":a1,"activity2":a2,"activity3":a3,"activity4":a4,"overall":round((a1+a2+a3+a4)/4,1)}
+
+
+def save_submission(payload:dict):
+    sh = get_spreadsheet()
+    p = calculate_percentages(payload)
+    if sh is None:
+        return False, "Google Sheets 연결 정보를 확인해 주세요.", p
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sid = str(payload.get("studentId", "")).strip()
+        name = str(payload.get("name", "")).strip()
+        blanks = payload.get("blanks", {}) or {}
+        verdict = ["O" if norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) and bool(norm(blanks.get(str(i),""))) else "X" for i in range(1,19)]
+        correct_count = sum(v=="O" for v in verdict)
+        row = [now,sid,name,p["activity1"],p["activity2"],p["activity3"],p["activity4"],p["overall"],correct_count,18]
+        row += [blanks.get(str(i),"") for i in range(1,19)] + verdict
+        row += [payload.get("structure","표"), json.dumps(payload,ensure_ascii=False)]
+        get_or_create_ws(sh,SUBMISSION_SHEET,cols=len(row)+2).append_row(row,value_input_option="USER_ENTERED")
+
+        summary = get_or_create_ws(sh,SUMMARY_SHEET,cols=10)
+        data = summary.get_all_values(); target=None
+        for r_idx, r in enumerate(data[1:], start=2):
+            if r and str(r[0]).strip()==sid: target=r_idx; break
+        srow=[sid,name,f'{p["activity1"]}%',f'{p["activity2"]}%',f'{p["activity3"]}%',f'{p["activity4"]}%',now]
+        if target: summary.update(range_name=f"A{target}:G{target}",values=[srow])
+        else: summary.append_row(srow,value_input_option="USER_ENTERED")
+
+        detail = {
+            "활동지1": f"개념 빈칸 10개 중 {sum(v=="O" for v in verdict[:10])}개 정답",
+            "활동지2": "학생이 직접 만든 목록 입력완료율",
+            "활동지3": f"계층형 다이어그램 빈칸 8개 중 {sum(v=="O" for v in verdict[10:])}개 정답",
+            "활동지4": f"선택 형태 {payload.get('structure','표')} · 직접 작성완료율",
+        }
+        for key,title in ACTIVITY_SHEETS.items():
+            get_or_create_ws(sh,title,cols=8).append_row([now,sid,name,f'{ {"활동지1":p["activity1"],"활동지2":p["activity2"],"활동지3":p["activity3"],"활동지4":p["activity4"]}[key] }%',"제출",detail[key]], value_input_option="USER_ENTERED")
+        return True, "제출 및 저장이 완료되었습니다.", p
     except Exception as exc:
-        return False, f"Google Sheets 저장 오류: {exc}"
+        return False, f"Google Sheets 저장 오류: {exc}", p
 
 
-# ------------------------------------------------------------
-# PDF와 비슷한 화면을 만드는 Custom Component V2
-# ------------------------------------------------------------
+def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
+    sh = get_spreadsheet()
+    if sh is None: return []
+    try:
+        rows = sh.worksheet(SUBMISSION_SHEET).get_all_values()
+        if len(rows)<=1: return []
+        headers=rows[0]; pi=headers.index("payload_json")
+        result=[]
+        for row in rows[1:]:
+            if len(row)>1 and str(row[1]).strip()==student_id and len(row)>pi and (not student_name or (len(row)>2 and str(row[2]).strip()==student_name.strip())):
+                try: payload=json.loads(row[pi])
+                except Exception: payload={"studentId":student_id,"name":row[2] if len(row)>2 else ""}
+                payload["_saved_at"]=row[0] if row else ""
+                result.append(payload)
+        result.sort(key=lambda x:str(x.get("_saved_at","")), reverse=True)
+        return result
+    except Exception:
+        return []
+
+
+def empty_payload(sid,name):
+    return {"grade":"1","studentId":sid,"number":sid,"name":name,"blanks":{},
+            "listRows":[["아침 환기 및 창문 열기 (샘플)","매일 등교 직후 8:30 창문 개방"]],
+            "tableRows":[["김민준(샘플)","03월 15일","축구, 코딩","1번 / 체육부장"]],
+            "experienceListRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+            "experienceTableRows":[["4월 (예시)","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+            "experienceDiagramRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+            "structure":"표","selfChecks":{"q1":False,"q2":False,"q3":False},"page":1,"score":0}
+
+
+# Login state
+for k, v in {"logged_in":False,"student_id":"","student_name":"","history":[],"worksheet_data":{},"loaded_history_index":0}.items():
+    if k not in st.session_state: st.session_state[k]=v
+
+if not st.session_state.logged_in:
+    st.markdown('<div class="login-card"><div class="login-title">📘 2026 서라벌 정보</div><div class="login-sub">데이터의 구조화와 분석 · 학번(4자리)과 이름으로 로그인하세요.</div></div>', unsafe_allow_html=True)
+    with st.form("login_form"):
+        c1,c2=st.columns(2)
+        sid=c1.text_input("학번 (4자리)", max_chars=4, placeholder="예: 1102")
+        name=c2.text_input("이름", placeholder="예: 홍길동")
+        submit_login=st.form_submit_button("로그인", type="primary", width="stretch")
+    if submit_login:
+        if not re.fullmatch(r"\d{4}",sid.strip()): st.error("학번은 숫자 4자리로 입력하세요.")
+        elif not name.strip(): st.error("이름을 입력하세요.")
+        else:
+            st.session_state.logged_in=True; st.session_state.student_id=sid.strip(); st.session_state.student_name=name.strip()
+            st.session_state.history=load_student_submissions(sid.strip(),name.strip())
+            st.session_state.worksheet_data=st.session_state.history[0] if st.session_state.history else empty_payload(sid.strip(),name.strip())
+            st.session_state.loaded_history_index=0
+            st.rerun()
+    st.stop()
+
+st.markdown(f'<span class="badge-ok">로그인됨 · {st.session_state.student_id} · {st.session_state.student_name}</span>', unsafe_allow_html=True)
+col_logout, col_refresh = st.columns([1,1])
+if col_logout.button("로그아웃", use_container_width=True):
+    st.session_state.logged_in=False; st.session_state.history=[]; st.session_state.worksheet_data={}; st.rerun()
+if col_refresh.button("🔄 이전 기록 새로 불러오기", use_container_width=True):
+    st.session_state.history=load_student_submissions(st.session_state.student_id, st.session_state.student_name)
+    if st.session_state.history: st.session_state.worksheet_data=st.session_state.history[0]
+    st.rerun()
+
+
 HTML = r'''
 <div id="worksheet-root">
 
@@ -120,13 +266,8 @@ HTML = r'''
         <h1>활동지 - 데이터의 구조화 <span>(목록형과 표 만들기)</span></h1>
       </div>
       <div class="student-card">
-        <span>1학년</span>
-        <input id="className" class="line-input tiny" inputmode="numeric" value="1">
-        <span>반</span>
-        <input id="studentNo" class="line-input tiny" inputmode="numeric" placeholder="1">
-        <span>번</span>
-        <span>이름:</span>
-        <input id="studentName" class="line-input name" placeholder="홍길동">
+        <span>학번</span><b id="loginStudentId">-</b>
+        <span>이름:</span><b id="loginStudentName">-</b>
       </div>
     </header>
 
@@ -688,7 +829,7 @@ export default function(component) {
 
   function collect(){
     const blanks={};root.querySelectorAll('.drop[data-id]').forEach(el=>blanks[el.dataset.id]=el.textContent.trim());
-    return {grade:'1',className:value('className'),number:value('studentNo'),name:value('studentName'),blanks,
+    return {grade:'1',studentId:initial.studentId||'',className:initial.className||'',number:initial.number||'',name:initial.name||'',blanks,
       listRows:clone(activity1Rows),tableRows:clone(activity2Rows),experienceListRows:clone(experienceListRows),experienceTableRows:clone(experienceTableRows),experienceDiagramRows:clone(experienceDiagramRows),experienceRows:clone(experienceTableRows),structure:currentStructure,
       selfChecks:{q1:value('check1'),q2:value('check2'),q3:value('check3')},page:currentPage,score:0,timestamp:new Date().toISOString()};
   }
@@ -702,11 +843,10 @@ export default function(component) {
 
   renderActivity1();renderActivity2();renderStructure(currentStructure);
 
-  if(initial.className!==undefined)root.querySelector('#className').value=initial.className||'1';
-  if(initial.number!==undefined)root.querySelector('#studentNo').value=initial.number||'';
-  if(initial.name!==undefined)root.querySelector('#studentName').value=initial.name||'';
+  if(initial.studentId!==undefined){const sid=root.querySelector('#loginStudentId');if(sid)sid.textContent=initial.studentId||'-';}
+  if(initial.name!==undefined){const nm=root.querySelector('#loginStudentName');if(nm)nm.textContent=initial.name||'-';}
   const initialBlanks=initial.blanks||{};
-  root.querySelectorAll('.drop[data-id]').forEach(el=>{const v=initialBlanks[el.dataset.id];if(v)el.textContent=v;updateBlankStatus(el,true);});
+  root.querySelectorAll('.drop[data-id]').forEach(el=>{const v=initialBlanks[el.dataset.id]||'';el.textContent=v;updateBlankStatus(el,true);});
   if(initial.selfChecks){root.querySelector('#check1').checked=!!initial.selfChecks.q1;root.querySelector('#check2').checked=!!initial.selfChecks.q2;root.querySelector('#check3').checked=!!initial.selfChecks.q3;}
 
   root.querySelectorAll('[data-go]').forEach(btn=>btn.addEventListener('click',()=>setPage(Number(btn.dataset.go))));
@@ -722,56 +862,95 @@ export default function(component) {
   });
   root.querySelector('#clearBtn').addEventListener('click',()=>{
     root.querySelectorAll('.drop').forEach(el=>{el.textContent='';el.classList.remove('correct','dragover','selected-drop');el.classList.add('wrong');});
-    root.querySelectorAll('input').forEach(el=>{if(el.id==='className')el.value='1';else if(el.type==='checkbox')el.checked=false;else el.value='';});
-    activity1Rows=[['아침 환기 및 창문 열기 (샘플)','매일 등교 직후 8:30 창문 개방']];activity2Rows=[['김민준(샘플)','03월 15일','축구, 코딩','1번 / 체육부장']];
-    experienceListRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];experienceTableRows=[['4월 (예시)','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];experienceDiagramRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];currentStructure='표';
-    renderActivity1();renderActivity2();renderStructure('표');root.querySelectorAll('.choice-buttons button').forEach(b=>b.classList.remove('selected'));root.querySelector('.choice-buttons button[data-structure="표"]')?.classList.add('selected');root.querySelector('#scoreText').textContent='';sync();
+    root.querySelectorAll('input[type="checkbox"]').forEach(el=>{el.checked=false;});
+    activity1Rows=[['아침 환기 및 창문 열기 (샘플)','매일 등교 직후 8:30 창문 개방']];
+    activity2Rows=[['김민준(샘플)','03월 15일','축구, 코딩','1번 / 체육부장']];
+    experienceListRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+    experienceTableRows=[['4월 (예시)','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+    experienceDiagramRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+    currentStructure='표';
+    renderActivity1();renderActivity2();renderStructure('표');
+    root.querySelectorAll('.choice-buttons button').forEach(b=>b.classList.remove('selected'));
+    root.querySelector('.choice-buttons button[data-structure="표"]')?.classList.add('selected');
+    root.querySelector('#scoreText').textContent='';sync();
   });
 
   setPage(currentPage);sync();return ()=>{};
 }
 '''
 
-# V2는 iframe 없이 Streamlit 본문에 바로 붙고 JS도 실행되므로,
-# 이전 v1 iframe에서 빈 화면처럼 보이던 문제를 피합니다.
 worksheet_component = st.components.v2.component(
     "data_structure_worksheet_v2",
-    html=HTML,
-    css=CSS,
-    js=JS,
-    isolate_styles=True,
+    html=HTML, css=CSS, js=JS, isolate_styles=True,
 )
 
-if "worksheet_data" not in st.session_state:
-    st.session_state.worksheet_data = {
-        "grade":"1", "className":"1", "number":"", "name":"", "blanks":{},
-        "listRows":[["아침 환기 및 창문 열기 (샘플)","매일 등교 직후 8:30 창문 개방"]],
-        "tableRows":[["김민준(샘플)","03월 15일","축구, 코딩","1번 / 체육부장"]],
-        "experienceListRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
-        "experienceTableRows":[["4월 (예시)","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
-        "experienceDiagramRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
-        "experienceRows":[], "structure":"표",
-        "selfChecks":{"q1":False,"q2":False,"q3":False}, "page":1, "score":0
-    }
 
-# V2의 default에는 "상태(state)"만 등록할 수 있습니다.
-# save는 JS에서 setTriggerValue()로 보내는 "trigger"이므로
-# default에 넣거나 on_save_change를 지정하면 BidiComponentInvalidDefaultKeyError가 발생합니다.
-result = worksheet_component(
-    key="worksheet",
-    data={"initial": st.session_state.worksheet_data},
-    default={"payload": st.session_state.worksheet_data},
-    on_payload_change=lambda: None,
-    width="stretch",
-    height="content",
-)
+with st.container():
+    result = worksheet_component(
+        key="worksheet",
+        data={"initial": st.session_state.worksheet_data},
+        default={"payload": st.session_state.worksheet_data},
+        on_payload_change=lambda: None,
+        width="stretch",
+        height="content",
+    )
 
-# 자동채점 버튼의 trigger가 Python으로 들어오면 저장합니다.
-save_payload = getattr(result, "save", None)
-if save_payload:
-    st.session_state.worksheet_data = save_payload
-    ok, message = save_to_google_sheet(save_payload)
-    if ok:
-        st.toast(message, icon="✅")
-    else:
-        st.toast("채점은 완료되었습니다. Google Sheets는 Secrets 설정 후 연결됩니다.", icon="ℹ️")
+    save_payload = getattr(result, "save", None)
+    if save_payload:
+        save_payload = dict(save_payload)
+        save_payload["studentId"] = st.session_state.student_id
+        save_payload["number"] = st.session_state.student_id
+        save_payload["name"] = st.session_state.student_name
+        st.session_state.worksheet_data = save_payload
+        ok, message, pcts = save_submission(save_payload)
+        st.session_state.history = load_student_submissions(st.session_state.student_id)
+        if ok:
+            st.success(message)
+            st.info(f"활동지1 {pcts['activity1']}% · 활동지2 {pcts['activity2']}% · 활동지3 {pcts['activity3']}% · 활동지4 {pcts['activity4']}% · 전체 {pcts['overall']}%")
+        else:
+            st.warning(message)
+
+# 이전 학습 기록은 별도 탭으로 확인할 수 있습니다.
+st.markdown("---")
+st.subheader("📚 내 학습 기록")
+history = st.session_state.history
+if not history:
+    st.info("아직 제출한 기록이 없습니다. 학습지에서 '자동 채점 및 저장'을 눌러 제출하세요.")
+else:
+    labels=[f"{i+1}. {h.get('_saved_at','')}" for i,h in enumerate(history)]
+    selected=st.selectbox("확인할 제출 기록", labels, index=min(st.session_state.loaded_history_index,len(labels)-1))
+    idx=labels.index(selected); h=history[idx]; p=calculate_percentages(h)
+    m1,m2,m3,m4=st.columns(4)
+    for col,title,val in [(m1,"활동지 1",p['activity1']),(m2,"활동지 2",p['activity2']),(m3,"활동지 3",p['activity3']),(m4,"활동지 4",p['activity4'])]:
+        with col:
+            st.markdown(f'<div class="history-card"><div class="metric-caption">{title}</div><div class="metric-value">{val}%</div></div>',unsafe_allow_html=True)
+
+    ht1,ht2,ht3,ht4=st.tabs(["활동지 1","활동지 2","활동지 3","활동지 4"])
+    with ht1:
+        rows=[]
+        for i in range(1,11):
+            ans=str(h.get("blanks",{}).get(str(i),"") or "")
+            ok=bool(ans) and norm(ans)==norm(BLANK_ANSWERS[str(i)])
+            rows.append({"번호":i,"학생 답":ans,"정답 여부":"정답" if ok else "오답/미입력"})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+    with ht2:
+        st.write("학생이 직접 작성한 목록")
+        st.dataframe(h.get("listRows",[]),use_container_width=True,hide_index=True)
+    with ht3:
+        rows=[]
+        for i in range(11,19):
+            ans=str(h.get("blanks",{}).get(str(i),"") or "")
+            ok=bool(ans) and norm(ans)==norm(BLANK_ANSWERS[str(i)])
+            rows.append({"번호":i-10,"학생 답":ans,"정답 여부":"정답" if ok else "오답/미입력"})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+    with ht4:
+        structure=h.get("structure","표")
+        model={"목록":h.get("experienceListRows",[]),"표":h.get("experienceTableRows",[]),"다이어그램":h.get("experienceDiagramRows",[])}.get(structure,[])
+        st.write(f"선택한 구조화 형태: **{structure}**")
+        st.dataframe(model,use_container_width=True,hide_index=True)
+        st.caption("활동지 2·4 퍼센트는 학생이 만든 입력칸의 입력완료율이며, 활동지 1·3은 정답률입니다.")
+
+    if st.button("↩ 선택한 이전 기록을 학습지로 불러오기"):
+        st.session_state.worksheet_data=h
+        st.session_state.loaded_history_index=idx
+        st.rerun()
