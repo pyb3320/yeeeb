@@ -725,11 +725,14 @@ if "worksheet_data" not in st.session_state:
         "selfChecks":{"q1":False,"q2":False,"q3":False}, "page":1, "score":0
     }
 
+# V2의 default에는 "상태(state)"만 등록할 수 있습니다.
+# save는 JS에서 setTriggerValue()로 보내는 "trigger"이므로
+# default에 넣거나 on_save_change를 지정하면 BidiComponentInvalidDefaultKeyError가 발생합니다.
 result = worksheet_component(
     key="worksheet",
     data={"initial": st.session_state.worksheet_data},
     default={"payload": st.session_state.worksheet_data},
-    on_save_change=lambda: None,
+    on_payload_change=lambda: None,
 )
 
 # 자동채점 버튼의 trigger가 Python으로 들어오면 저장합니다.
