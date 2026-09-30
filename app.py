@@ -513,6 +513,12 @@ export default function(component) {
   const words = ['데이터','특성','정리 및 배열','통일된 모양','쉽게 찾을','내용 요소 간의 관계','효율적으로 관리','기준','세로줄과 가로줄','점, 선, 도형'];
   const page2Words = ['소프트웨어 개발 전문가','시스템 SW 개발자','응용 SW 개발자'];
 
+  // Streamlit Components V2에는 V1의 resize() 전역 함수가 없습니다.
+  // 컴포넌트 높이는 Python mount의 height="content"가 담당합니다.
+  function resize() {
+    return;
+  }
+
   function norm(v) {
     return String(v ?? '').trim().toLowerCase().replace(/\s+/g,'');
   }
@@ -733,6 +739,8 @@ result = worksheet_component(
     data={"initial": st.session_state.worksheet_data},
     default={"payload": st.session_state.worksheet_data},
     on_payload_change=lambda: None,
+    width="stretch",
+    height="content",
 )
 
 # 자동채점 버튼의 trigger가 Python으로 들어오면 저장합니다.
