@@ -59,36 +59,46 @@ def _as_dict(value: Any) -> dict:
 
 
 @st.cache_resource(show_spinner=False)
-def get_google_client():
-    """Streamlit Secrets의 서비스 계정으로 Google API 클라이언트를 생성합니다.
+def _secret_dict(name: str) -> dict:
+    try:
+        return dict(st.secrets.get(name, {}))
+    except Exception:
+        return {}
 
-    private_key를 복붙할 때 '\\n' 문자로 들어오는 경우를 실제 줄바꿈으로 정규화합니다.
-    """
+
+@st.cache_resource(show_spinner=False)
+def get_google_client():
+    """Google Sheets용 gspread 클라이언트를 생성합니다."""
     import gspread
     from google.oauth2.service_account import Credentials
 
-    if "gcp_service_account" not in st.secrets:
-        raise RuntimeError("Secrets에 [gcp_service_account] 섹션이 없습니다.")
+    creds_info = _secret_dict("gcp_service_account")
+    if not creds_info:
+        raise RuntimeError(
+            "Streamlit Secrets에 [gcp_service_account]가 없습니다. "
+            "서비스 계정 JSON 내용을 해당 섹션에 넣어 주세요."
+        )
 
-    creds_info = _as_dict(st.secrets["gcp_service_account"])
     required = ["type", "project_id", "private_key", "client_email"]
     missing = [k for k in required if not creds_info.get(k)]
     if missing:
-        raise RuntimeError("[gcp_service_account]에 다음 항목이 없습니다: " + ", ".join(missing))
+        raise RuntimeError(
+            "[gcp_service_account]에서 빠진 항목: " + ", ".join(missing)
+        )
 
-    # TOML에 literal \n을 붙여넣은 경우도 처리
-    if isinstance(creds_info.get("private_key"), str):
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+    private_key = str(creds_info.get("private_key", ""))
+    creds_info["private_key"] = private_key.replace("\\n", "\n")
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
+
     try:
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as exc:
-        raise RuntimeError(f"서비스 계정 인증 실패: {exc}") from exc
+        raise RuntimeError(f"서비스 계정 인증에 실패했습니다: {exc}") from exc
 
 
 def column_letter(n:int) -> str:
@@ -125,54 +135,64 @@ def ensure_worksheets(sh):
 
 
 def get_spreadsheet():
-    """설정된 스프레드시트를 열고 필요한 워크시트를 준비합니다.
-
-    연결 실패 원인을 숨기지 않고 사람이 이해할 수 있는 메시지로 반환할 수 있도록
-    예외를 호출부에서 처리할 수 있게 그대로 올립니다.
-    """
+    """Secrets에 지정된 Google Spreadsheet를 열고 필요한 탭을 준비합니다."""
     gc = get_google_client()
-    cfg = _as_dict(st.secrets.get("google_sheet", {}))
-
+    cfg = _secret_dict("google_sheet")
     if not cfg:
-        raise RuntimeError("Secrets에 [google_sheet] 섹션이 없습니다.")
+        raise RuntimeError(
+            "Streamlit Secrets에 [google_sheet]가 없습니다. "
+            "spreadsheet_url 또는 spreadsheet_id를 넣어 주세요."
+        )
 
     url = str(cfg.get("spreadsheet_url", "")).strip()
     key = str(cfg.get("spreadsheet_id", "")).strip()
 
+    if url:
+        # URL 자체에서 ID가 추출 가능한지 먼저 확인합니다.
+        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+        if not m:
+            raise RuntimeError(
+                "spreadsheet_url 형식이 올바르지 않습니다. "
+                "Google Sheets 주소를 /edit까지 포함해 그대로 넣어 주세요."
+            )
+        key = m.group(1)
+
+    if not key:
+        raise RuntimeError(
+            "[google_sheet]에 spreadsheet_url 또는 spreadsheet_id가 없습니다."
+        )
+
+    service_email = str(
+        _secret_dict("gcp_service_account").get("client_email", "")
+    ).strip()
+
     try:
-        if url:
-            sh = gc.open_by_url(url)
-        elif key:
-            sh = gc.open_by_key(key)
-        else:
-            # URL/ID가 없을 때에는 서비스 계정이 소유한 파일을 검색합니다.
-            try:
-                sh = gc.open(SPREADSHEET_TITLE)
-            except Exception:
-                sh = gc.create(SPREADSHEET_TITLE)
-
-        if sh.title != SPREADSHEET_TITLE:
-            try:
-                sh.update_title(SPREADSHEET_TITLE)
-            except Exception:
-                # 제목 변경 권한이 없어도 저장 자체는 계속할 수 있습니다.
-                pass
-
-        teacher_email = str(cfg.get("teacher_email", "")).strip()
-        if teacher_email:
-            try:
-                sh.share(teacher_email, perm_type="user", role="writer", notify=False)
-            except Exception:
-                pass
-
-        ensure_worksheets(sh)
-        return sh
+        sh = gc.open_by_key(key)
+    except PermissionError as exc:
+        raise RuntimeError(
+            "Google Sheets 접근 권한이 없습니다.\n\n"
+            f"현재 앱이 사용하는 서비스 계정: {service_email or '확인할 수 없음'}\n\n"
+            "Google Sheets에서 [공유] → 위 서비스 계정 이메일을 추가하고 "
+            "[편집자] 권한을 주세요. 또한 Google Sheets API와 Google Drive API가 "
+            "해당 Google Cloud 프로젝트에서 사용 설정되어 있어야 합니다."
+        ) from exc
     except Exception as exc:
-        client_email = _as_dict(st.secrets.get("gcp_service_account", {})).get("client_email", "")
-        hint = ""
-        if client_email:
-            hint = f" 서비스 계정({client_email})에 해당 스프레드시트의 편집자 권한이 있는지 확인하세요."
-        raise RuntimeError(f"스프레드시트 연결 실패: {exc}.{hint}") from exc
+        raise RuntimeError(
+            f"Google Sheets 열기에 실패했습니다: {exc}"
+        ) from exc
+
+    # 기존 파일명을 강제로 바꾸지 않습니다. 사용자가 만든 시트를 그대로 사용합니다.
+    try:
+        ensure_worksheets(sh)
+    except PermissionError as exc:
+        raise RuntimeError(
+            "스프레드시트는 열렸지만 탭을 만들거나 수정할 권한이 없습니다. "
+            f"서비스 계정({service_email})에 편집자 권한을 주세요."
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(f"스프레드시트 탭 설정에 실패했습니다: {exc}") from exc
+
+    return sh
 
 
 def norm(v:Any) -> str:
@@ -200,11 +220,10 @@ def calculate_percentages(payload:dict) -> dict:
 
 
 def save_submission(payload:dict):
+    sh = get_spreadsheet()
     p = calculate_percentages(payload)
-    try:
-        sh = get_spreadsheet()
-    except Exception as exc:
-        return False, str(exc), p
+    if sh is None:
+        return False, "Google Sheets 연결에 실패했습니다.", p
     try:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sid = str(payload.get("studentId", "")).strip()
@@ -283,9 +302,14 @@ if not st.session_state.logged_in:
         if not re.fullmatch(r"\d{4}",sid.strip()): st.error("학번은 숫자 4자리로 입력하세요.")
         elif not name.strip(): st.error("이름을 입력하세요.")
         else:
+            try:
+                history = load_student_submissions(sid.strip(), name.strip())
+            except Exception as exc:
+                st.error(str(exc))
+                st.stop()
             st.session_state.logged_in=True; st.session_state.student_id=sid.strip(); st.session_state.student_name=name.strip()
-            st.session_state.history=load_student_submissions(sid.strip(),name.strip())
-            st.session_state.worksheet_data=st.session_state.history[0] if st.session_state.history else empty_payload(sid.strip(),name.strip())
+            st.session_state.history=history
+            st.session_state.worksheet_data=history[0] if history else empty_payload(sid.strip(),name.strip())
             st.session_state.loaded_history_index=0
             st.rerun()
     st.stop()
@@ -295,9 +319,12 @@ col_logout, col_refresh = st.columns([1,1])
 if col_logout.button("로그아웃", use_container_width=True):
     st.session_state.logged_in=False; st.session_state.history=[]; st.session_state.worksheet_data={}; st.rerun()
 if col_refresh.button("🔄 이전 기록 새로 불러오기", use_container_width=True):
-    st.session_state.history=load_student_submissions(st.session_state.student_id, st.session_state.student_name)
-    if st.session_state.history: st.session_state.worksheet_data=st.session_state.history[0]
-    st.rerun()
+    try:
+        st.session_state.history=load_student_submissions(st.session_state.student_id, st.session_state.student_name)
+        if st.session_state.history: st.session_state.worksheet_data=st.session_state.history[0]
+        st.rerun()
+    except Exception as exc:
+        st.error(str(exc))
 
 
 HTML = r'''
@@ -929,21 +956,6 @@ worksheet_component = st.components.v2.component(
     html=HTML, css=CSS, js=JS, isolate_styles=True,
 )
 
-# Google Sheets 연결 상태를 교사용으로 확인할 수 있는 작은 진단 영역
-with st.expander("🔧 Google Sheets 연결 상태 확인", expanded=False):
-    try:
-        _test_sh = get_spreadsheet()
-        st.success(f"연결 성공: {_test_sh.title}")
-        st.caption(f"저장 탭: {SUBMISSION_SHEET} / 현황 탭: {SUMMARY_SHEET}")
-    except Exception as _exc:
-        st.error(str(_exc))
-        st.markdown(
-            "**확인할 항목**\n"
-            "1. Streamlit Cloud → Settings → Secrets에 `[gcp_service_account]`와 `[google_sheet]`가 있는지 확인\n"
-            "2. `client_email` 주소를 해당 Google Sheets의 공유 대상에 **편집자**로 추가\n"
-            "3. Google Cloud에서 **Google Sheets API**와 **Google Drive API**를 활성화\n"
-            "4. `spreadsheet_url`이 실제 `2026_서라벌_정보` 스프레드시트 주소인지 확인"
-        )
 
 with st.container():
     result = worksheet_component(
