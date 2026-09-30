@@ -17,7 +17,7 @@ st.set_page_config(page_title="2026 서라벌 정보", page_icon="📘", layout=
 
 SPREADSHEET_TITLE = "2026_서라벌_정보"
 # Google Sheets 주소는 Secrets에 넣지 않고 코드에 고정합니다.
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1phUIj-pYwo5kWrVOKPJHF3R5UazmGqgjlVbWo1CD_7Q/edit?gid=0#gid=0"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1phUIj-pYwo5kWrVOKPJHF3R5UazmGqgjlVbWo1CD_7Q/edit"
 SUBMISSION_SHEET = "제출기록"
 SUMMARY_SHEET = "학생별현황"
 ACTIVITY_SHEETS = {
