@@ -71,9 +71,12 @@ def save_to_google_sheet(payload: dict):
         worksheet = client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
 
         blanks = payload.get("blanks", {})
+        import json
         list_rows = payload.get("listRows", [])
         table_rows = payload.get("tableRows", [])
-        experience_rows = payload.get("experienceRows", [])
+        experience_list_rows = payload.get("experienceListRows", [])
+        experience_table_rows = payload.get("experienceTableRows", [])
+        experience_diagram_rows = payload.get("experienceDiagramRows", [])
         checks = payload.get("selfChecks", {})
 
         row = [
@@ -85,12 +88,12 @@ def save_to_google_sheet(payload: dict):
             *[blanks.get(str(i), "") for i in range(1, 14)],
             payload.get("score", 0),
             payload.get("structure", "표"),
-            *[v for pair in list_rows[:2] for v in pair],
-            *[v for row_data in table_rows[:3] for v in row_data],
-            *[v for row_data in experience_rows[:2] for v in row_data],
-            checks.get("q1", False),
-            checks.get("q2", False),
-            checks.get("q3", False),
+            json.dumps(list_rows, ensure_ascii=False),
+            json.dumps(table_rows, ensure_ascii=False),
+            json.dumps(experience_list_rows, ensure_ascii=False),
+            json.dumps(experience_table_rows, ensure_ascii=False),
+            json.dumps(experience_diagram_rows, ensure_ascii=False),
+            json.dumps(checks, ensure_ascii=False),
         ]
         worksheet.append_row(row, value_input_option="USER_ENTERED")
         return True, "Google Sheets에 저장되었습니다."
@@ -208,19 +211,9 @@ HTML = r'''
         <span class="practice-icon blue">▣</span>
         <b>[활동 1] 목록(List)형 데이터 만들기: 우리 반 학급 1인 1역할 체크리스트</b>
       </div>
-      <div class="practice-note">* 일정한 기준(시간 순서 또는 중요도)에 맞춰 순서대로 나열합니다.</div>
-      <div class="note-right blue-note">1번 행은 샘플이며, 2번부터 직접 채워보세요!</div>
-      <div class="list-grid">
-        <div class="cell numcell">1.</div>
-        <div class="cell sample">아침 환기 및 창문 열기 (샘플)</div>
-        <div class="cell sample">매일 등교 직후 8:30 창문 개방</div>
-        <div class="cell numcell">2.</div>
-        <input class="cell-edit" id="list1a" placeholder="활동 역할/항목 이름 입력">
-        <input class="cell-edit" id="list1b" placeholder="세부 실천 내용 또는 시간/장소">
-        <div class="cell numcell">3.</div>
-        <input class="cell-edit" id="list2a" placeholder="활동 역할/항목 이름 입력">
-        <input class="cell-edit" id="list2b" placeholder="세부 실천 내용 또는 시간/장소">
-      </div>
+      <div class="practice-note">* 일정한 기준(시간 순서 또는 중요도)에 맞춰 순서대로 나열합니다. 1번은 샘플이며 2번부터 자유롭게 작성하세요.</div>
+      <div class="dynamic-area" id="activity1ListArea"></div>
+      <button class="add-row-btn" id="addListBtn">＋ 목록 항목 추가</button>
     </section>
 
     <section class="practice-block">
@@ -228,17 +221,14 @@ HTML = r'''
         <span class="practice-icon green">▣</span>
         <b>[활동 2] 표(Table) 만들기 실습: 우리 모둠 친구 데이터 정리</b>
       </div>
-      <div class="practice-note">* 가로줄(행: 친구)과 세로줄(열: 항목)로 구성된 2차원 표입니다.</div>
-      <div class="note-right green-note">1번 행은 샘플이며, 2번부터 직접 채워보세요!</div>
-      <table class="student-table">
-        <thead><tr><th>번호</th><th>친구 이름</th><th>생일 (월/일)</th><th>취미 / 특기</th><th>역할 또는 한 줄 메모</th></tr></thead>
-        <tbody>
-          <tr><td>1</td><td><b>김민준(샘플)</b></td><td>03월 15일</td><td>축구, 코딩</td><td>1번 / 체육부장</td></tr>
-          <tr><td>2</td><td><input id="table1name" placeholder="이름"></td><td><input id="table1birth" placeholder="00월 00일"></td><td><input id="table1hobby" placeholder="취미"></td><td><input id="table1memo" placeholder="역할이나 메모"></td></tr>
-          <tr><td>3</td><td><input id="table2name" placeholder="이름"></td><td><input id="table2birth" placeholder="00월 00일"></td><td><input id="table2hobby" placeholder="취미"></td><td><input id="table2memo" placeholder="역할이나 메모"></td></tr>
-          <tr><td>4</td><td><input id="table3name" placeholder="이름"></td><td><input id="table3birth" placeholder="00월 00일"></td><td><input id="table3hobby" placeholder="취미"></td><td><input id="table3memo" placeholder="역할이나 메모"></td></tr>
-        </tbody>
-      </table>
+      <div class="practice-note">* 가로줄(행: 친구)과 세로줄(열: 항목)로 구성된 2차원 표입니다. 1번은 샘플이며 필요한 만큼 행을 추가하세요.</div>
+      <div class="dynamic-table-wrap">
+        <table class="student-table" id="activity2Table">
+          <thead><tr><th>번호</th><th>친구 이름</th><th>생일 (월/일)</th><th>취미 / 특기</th><th>역할 또는 한 줄 메모</th><th class="delete-col">삭제</th></tr></thead>
+          <tbody id="activity2TableBody"></tbody>
+        </table>
+      </div>
+      <button class="add-row-btn green-add" id="addTableBtn">＋ 표 행 추가</button>
     </section>
 
     <footer class="sheet-footer">
@@ -272,30 +262,30 @@ HTML = r'''
 
     <section class="diagram-box">
       <div class="diagram-guide">[ (나) 계층형 구조도 (트리 다이어그램) - 빈칸에 단어를 끌어다 놓으세요 ]</div>
-      <div class="page2-bank" id="page2Bank"><span class="page2-label">단어:</span></div>
+      <div class="page2-bank" id="page2Bank"><span class="page2-label">단어 보관함</span></div>
 
       <div class="tree">
         <div class="tree-node root-node">
           <div class="node-label">최상위 분류</div>
-          <span class="drop blank" data-id="11" data-answer="소프트웨어 개발 전문가" contenteditable="true" spellcheck="false">[빈칸 1] 최상위 직무 입력</span>
+          <span class="drop blank" data-id="11" data-answer="소프트웨어 개발 전문가" contenteditable="true" spellcheck="false"></span>
         </div>
         <div class="tree-connector"></div>
         <div class="tree-children">
           <div class="branch">
             <div class="branch-node">
               <div class="node-label">분류 1 (하위 시스템)</div>
-              <span class="drop blank" data-id="12" data-answer="시스템 SW 개발자" contenteditable="true" spellcheck="false">[빈칸 2] 시스템 SW...</span>
+              <span class="drop blank" data-id="12" data-answer="시스템 SW 개발자" contenteditable="true" spellcheck="false"></span>
             </div>
             <div class="branch-line"></div>
-            <div class="leaf-row two-leaf"><div class="leaf">운영체제...</div><div class="leaf">임베디드...</div></div>
+            <div class="leaf-row two-leaf"><div class="leaf">운영체제 프로그래머</div><div class="leaf">임베디드 프로그래머</div></div>
           </div>
           <div class="branch">
             <div class="branch-node purple-node">
               <div class="node-label">분류 2 (하위 응용)</div>
-              <span class="drop blank" data-id="13" data-answer="응용 SW 개발자" contenteditable="true" spellcheck="false">[빈칸 3] 응용 SW...</span>
+              <span class="drop blank" data-id="13" data-answer="응용 SW 개발자" contenteditable="true" spellcheck="false"></span>
             </div>
             <div class="branch-line purple-line"></div>
-            <div class="leaf-row three-leaf"><div class="leaf">응용 SW...</div><div class="leaf">네트워크...</div><div class="leaf">게임 개발...</div></div>
+            <div class="leaf-row three-leaf"><div class="leaf">응용 SW 프로그래머</div><div class="leaf">네트워크 프로그래머</div><div class="leaf">컴퓨터 및 모바일 게임 프로그래머</div></div>
           </div>
         </div>
       </div>
@@ -320,15 +310,8 @@ HTML = r'''
     </section>
 
     <section id="structureOutput" class="structure-output">
-      <div class="output-title">[ 표(Table)로 구조화한 체험학습 계획 ] (1번 행 샘플)</div>
-      <table class="experience-table">
-        <thead><tr><th>일정(월)</th><th>방문 목적지(장소)</th><th>이용 교통수단</th><th>체험 목적 및 세부 내용</th></tr></thead>
-        <tbody>
-          <tr><td class="example-month">4월 (예시)</td><td><b>경복궁, 창덕궁, 종묘</b></td><td>지하철 3호선</td><td>봄꽃 감상 및 역사 탐방</td></tr>
-          <tr><td><input id="exp1month" placeholder="0월"></td><td><input id="exp1place" placeholder="방문 장소 입력"></td><td><input id="exp1transport" placeholder="지하철 호선"></td><td><input id="exp1purpose" placeholder="목적 입력"></td></tr>
-          <tr><td><input id="exp2month" placeholder="0월"></td><td><input id="exp2place" placeholder="방문 장소 입력"></td><td><input id="exp2transport" placeholder="지하철 호선"></td><td><input id="exp2purpose" placeholder="목적 입력"></td></tr>
-        </tbody>
-      </table>
+      <div class="output-title">[ 표(Table)로 구조화한 체험학습 계획 ]</div>
+      <div id="experienceEditor" class="experience-editor"></div>
     </section>
 
     <section class="check-box">
@@ -393,6 +376,11 @@ h2 { font-size:19px; margin:12px 0 6px; line-height:1.3; font-weight:900; letter
 .sentence { font-size:15px; }
 .drop { display:inline-flex; min-width:72px; min-height:28px; align-items:center; justify-content:center; border:2px solid #97a9c0; border-radius:5px; background:#fbfcfd; color:#7b8799; padding:2px 7px; vertical-align:middle; outline:none; font-weight:800; white-space:normal; text-align:center; }
 .drop:focus { border-color:#2978e8; box-shadow:0 0 0 2px #dceaff; }
+.drop::after { content:"●"; position:absolute; right:4px; top:2px; font-size:8px; line-height:1; color:#d76666; }
+.drop { position:relative; padding-right:15px; }
+.drop.correct::after { color:#42a968; }
+.drop.wrong::after { color:#d76666; }
+
 .drop.dragover { background:#e6f1ff; border-color:#2d78ea; }
 .drop.correct { background:#ecfff2; border-color:#58ae73; color:#277245; }
 .drop.wrong { background:#fff0f0; border-color:#d77474; color:#9a3030; }
@@ -475,6 +463,39 @@ th,td { border:1px solid #b9cbe0; }
 .score-text { margin-right:auto; color:#1b5cae; font-weight:900; font-size:12px; }
 .primary-btn { color:#fff; background:#1e68dc; border:1px solid #1e68dc; }
 .secondary-btn { background:#fff; color:#48627f; border:1px solid #b9c9dc; }
+
+.dynamic-area { padding:6px; background:#fbfdff; border-top:1px solid #d8e1ec; }
+.dynamic-list-row { display:grid; grid-template-columns:36px 1fr 1fr 34px; gap:5px; align-items:center; margin-bottom:5px; }
+.dynamic-list-row:last-child { margin-bottom:0; }
+.row-num { color:#1767d7; font-weight:900; text-align:center; }
+.cell-edit { width:100%; min-height:30px; border:1px solid #b9cbe0; border-radius:4px; background:#fff; padding:5px 8px; font:inherit; font-size:11px; outline:none; }
+.cell-edit:focus { border-color:#2b79e7; box-shadow:0 0 0 2px #e2efff; }
+.sample-cell { background:#f7fbff; border:1px solid #d2dfec; border-radius:4px; padding:6px 8px; font-size:11px; font-weight:700; }
+.dynamic-table-wrap { overflow-x:auto; border-top:1px solid #d8e1ec; }
+.student-table .delete-col { width:44px; }
+.student-table input { min-height:30px; }
+.delete-btn { border:0; background:transparent; color:#b56b6b; cursor:pointer; font-size:12px; font-weight:900; }
+.add-row-btn { margin:6px 8px 8px; border:1px solid #a8c3e4; background:#f4f8fd; color:#1962c9; border-radius:5px; padding:5px 9px; font:inherit; font-size:11px; font-weight:900; cursor:pointer; }
+.green-add { color:#168760; border-color:#acd6c4; background:#f3fbf7; }
+.experience-editor { padding:7px; }
+.editor-note { color:#60748e; font-size:10px; margin-bottom:6px; }
+.plan-list { display:flex; flex-direction:column; gap:6px; }
+.plan-list-row { display:grid; grid-template-columns:34px 65px 1fr 120px 1fr 34px; gap:5px; align-items:center; }
+.plan-input { width:100%; min-height:30px; border:1px solid #b9cbe0; border-radius:4px; background:#fff; padding:5px 7px; outline:none; font:inherit; font-size:11px; }
+.plan-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.plan-table th,.plan-table td { border:1px solid #bfd0e1; padding:4px; }
+.plan-table th { background:#edf3f8; color:#36516e; font-size:11px; }
+.plan-table input { width:100%; border:0; min-height:28px; outline:none; text-align:center; font:inherit; font-size:11px; background:transparent; }
+.plan-table .sample-row { background:#f7fbff; }
+.plan-diagram { display:flex; flex-direction:column; gap:8px; }
+.plan-diagram-row { display:grid; grid-template-columns:55px 16px 1fr 34px; align-items:center; gap:6px; }
+.plan-month-node { border:2px solid #8ab1eb; background:#f5f9ff; border-radius:8px; padding:7px 4px; text-align:center; font-size:11px; font-weight:900; color:#1c5fb8; }
+.plan-line { height:2px; background:#9bb4d1; position:relative; }
+.plan-line::after { content:""; position:absolute; right:-1px; top:-3px; width:0; height:0; border-left:7px solid #9bb4d1; border-top:4px solid transparent; border-bottom:4px solid transparent; }
+.plan-node-card { display:grid; grid-template-columns:1fr 110px 1fr; gap:5px; border:1px solid #cbd7e4; border-radius:7px; background:#fff; padding:5px; }
+.plan-node-card input { width:100%; min-height:30px; border:1px solid #d5dfeb; border-radius:4px; outline:none; padding:5px; font:inherit; font-size:10px; }
+.plan-node-card input:focus { border-color:#7aa9e9; box-shadow:0 0 0 2px #e5f0ff; }
+
 .simple-list-view,.simple-diagram-view { margin-top:5px; padding:8px; border:1px solid #d4deea; border-radius:5px; background:#fbfdff; font-size:11px; line-height:1.8; }
 .simple-diagram-view .diag-line { display:grid; grid-template-columns:60px 1fr 80px; gap:6px; padding:5px 0; border-bottom:1px dashed #d5dfeb; }
 .simple-diagram-view .diag-line:last-child { border-bottom:0; }
@@ -500,6 +521,8 @@ JS = r'''
 export default function(component) {
   const { parentElement, setStateValue, setTriggerValue, data } = component;
   const root = parentElement.querySelector('#worksheet-root');
+  if (!root) return () => {};
+
   const front = root.querySelector('.sheet-front');
   const back = root.querySelector('.sheet-back');
 
@@ -510,207 +533,161 @@ export default function(component) {
     "11":"소프트웨어 개발 전문가", "12":"시스템 SW 개발자", "13":"응용 SW 개발자"
   };
 
-  const words = ['데이터','특성','정리 및 배열','통일된 모양','쉽게 찾을','내용 요소 간의 관계','효율적으로 관리','기준','세로줄과 가로줄','점, 선, 도형'];
+  const words = [
+    '데이터','특성','정리 및 배열','통일된 모양','쉽게 찾을',
+    '내용 요소 간의 관계','효율적으로 관리','기준','세로줄과 가로줄','점, 선, 도형'
+  ];
   const page2Words = ['소프트웨어 개발 전문가','시스템 SW 개발자','응용 SW 개발자'];
+  const initial = data?.initial || {};
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const esc = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const norm = v => String(v ?? '').trim().toLowerCase().replace(/\s+/g,'');
 
-  // Streamlit Components V2에는 V1의 resize() 전역 함수가 없습니다.
-  // 컴포넌트 높이는 Python mount의 height="content"가 담당합니다.
-  function resize() {
-    return;
-  }
-
-  function norm(v) {
-    return String(v ?? '').trim().toLowerCase().replace(/\s+/g,'');
-  }
-
-  function value(id) {
-    const el = root.querySelector('#' + id);
-    if (!el) return '';
-    if (el.type === 'checkbox') return !!el.checked;
-    if (el.isContentEditable) return el.textContent.trim();
-    return el.value ?? '';
-  }
+  let activity1Rows = Array.isArray(initial.listRows) && initial.listRows.length ? clone(initial.listRows) : [['아침 환기 및 창문 열기 (샘플)','매일 등교 직후 8:30 창문 개방']];
+  let activity2Rows = Array.isArray(initial.tableRows) && initial.tableRows.length ? clone(initial.tableRows) : [['김민준(샘플)','03월 15일','축구, 코딩','1번 / 체육부장']];
+  let experienceListRows = Array.isArray(initial.experienceListRows) && initial.experienceListRows.length ? clone(initial.experienceListRows) : [['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+  let experienceTableRows = Array.isArray(initial.experienceTableRows) && initial.experienceTableRows.length ? clone(initial.experienceTableRows) : [['4월 (예시)','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+  let experienceDiagramRows = Array.isArray(initial.experienceDiagramRows) && initial.experienceDiagramRows.length ? clone(initial.experienceDiagramRows) : [['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];
+  let currentPage = Number(initial.page || 1);
+  let currentStructure = initial.structure || '표';
 
   function addWord(parent, text) {
     const span = document.createElement('span');
-    span.className = 'word';
-    span.textContent = text;
-    span.draggable = true;
-    span.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', text);
-      e.dataTransfer.effectAllowed = 'copy';
-    });
+    span.className = 'word'; span.textContent = text; span.draggable = true;
+    span.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', text); e.dataTransfer.effectAllowed='copy'; });
     span.addEventListener('click', () => {
-      const active = root.querySelector('.drop:focus');
-      if (active) { active.textContent = text; sync(); }
+      const active = root.querySelector('.drop:focus') || root.querySelector('.drop.selected-drop');
+      if (active) { active.textContent=text; updateBlankStatus(active,true); sync(); }
     });
     parent.appendChild(span);
   }
 
-  const bank = root.querySelector('#wordBank');
-  if (!bank.dataset.ready) {
-    words.forEach(w => addWord(bank, w));
-    bank.dataset.ready = '1';
-  }
-  const bank2 = root.querySelector('#page2Bank');
-  if (!bank2.dataset.ready) {
-    page2Words.forEach(w => addWord(bank2, w));
-    bank2.dataset.ready = '1';
+  function updateBlankStatus(el, showEmptyAsWrong=true) {
+    const val=el.textContent.trim();
+    el.classList.remove('correct','wrong');
+    if (!val) { if (showEmptyAsWrong) el.classList.add('wrong'); return false; }
+    const ok=norm(val)===norm(answers[el.dataset.id]);
+    el.classList.add(ok?'correct':'wrong');
+    return ok;
   }
 
-  root.querySelectorAll('.drop').forEach(el => {
-    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('dragover'); });
-    el.addEventListener('dragleave', () => el.classList.remove('dragover'));
-    el.addEventListener('drop', (e) => {
-      e.preventDefault();
-      el.classList.remove('dragover');
-      const text = e.dataTransfer.getData('text/plain');
-      if (text) { el.textContent = text; sync(); }
+  function bindDrop(el) {
+    if (el.dataset.bound) return;
+    el.dataset.bound='1';
+    el.addEventListener('focus',()=>{ root.querySelectorAll('.selected-drop').forEach(x=>x.classList.remove('selected-drop')); el.classList.add('selected-drop'); });
+    el.addEventListener('click',()=>{ root.querySelectorAll('.selected-drop').forEach(x=>x.classList.remove('selected-drop')); el.classList.add('selected-drop'); });
+    el.addEventListener('dragover',e=>{ e.preventDefault(); el.classList.add('dragover'); });
+    el.addEventListener('dragleave',()=>el.classList.remove('dragover'));
+    el.addEventListener('drop',e=>{ e.preventDefault(); el.classList.remove('dragover'); const text=e.dataTransfer.getData('text/plain'); if(text){el.textContent=text; updateBlankStatus(el,true); sync();} });
+    el.addEventListener('input',()=>{ updateBlankStatus(el,true); sync(); });
+    el.addEventListener('keydown',e=>{if(e.key==='Enter') e.preventDefault();});
+  }
+
+  function value(id) { const el=root.querySelector('#'+id); if(!el) return ''; if(el.type==='checkbox') return !!el.checked; return el.isContentEditable?el.textContent.trim():(el.value??''); }
+
+  function renderActivity1() {
+    const area=root.querySelector('#activity1ListArea'); if(!area) return; area.innerHTML='';
+    activity1Rows.forEach((row,index)=>{
+      const wrap=document.createElement('div'); wrap.className='dynamic-list-row';
+      const sample=index===0;
+      wrap.innerHTML=`<div class="row-num">${index+1}.</div>${sample?`<div class="sample-cell">${esc(row[0])}</div><div class="sample-cell">${esc(row[1])}</div>`:`<input class="cell-edit list-a" value="${esc(row[0])}"><input class="cell-edit list-b" value="${esc(row[1])}">`}<button class="delete-btn" data-list-delete="${index}">${sample?'—':'🗑'}</button>`;
+      area.appendChild(wrap);
+      if(!sample){ wrap.querySelector('.list-a').addEventListener('input',e=>{activity1Rows[index][0]=e.target.value;sync();}); wrap.querySelector('.list-b').addEventListener('input',e=>{activity1Rows[index][1]=e.target.value;sync();}); }
     });
-    el.addEventListener('input', sync);
-    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
-  });
+    area.querySelectorAll('[data-list-delete]').forEach(btn=>btn.addEventListener('click',()=>{const i=Number(btn.dataset.listDelete);if(i===0)return;activity1Rows.splice(i,1);renderActivity1();sync();}));
+  }
 
-  const inputSelectors = 'input:not([type="button"]):not([type="submit"])';
-  root.querySelectorAll(inputSelectors).forEach(el => {
-    el.addEventListener('input', sync);
-    el.addEventListener('change', sync);
-  });
-
-  function collect() {
-    const blanks = {};
-    root.querySelectorAll('.drop[data-id]').forEach(el => {
-      blanks[el.dataset.id] = el.textContent.trim();
+  function renderActivity2() {
+    const body=root.querySelector('#activity2TableBody'); if(!body) return; body.innerHTML='';
+    activity2Rows.forEach((row,index)=>{
+      const tr=document.createElement('tr');
+      if(index===0){ tr.innerHTML=`<td>1</td><td><b>${esc(row[0]||'김민준(샘플)')}</b></td><td>${esc(row[1]||'03월 15일')}</td><td>${esc(row[2]||'축구, 코딩')}</td><td>${esc(row[3]||'1번 / 체육부장')}</td><td>—</td>`; }
+      else { tr.innerHTML=`<td>${index+1}</td><td><input class=a2-name value="${esc(row[0])}"></td><td><input class=a2-birth value="${esc(row[1])}"></td><td><input class=a2-hobby value="${esc(row[2])}"></td><td><input class=a2-memo value="${esc(row[3])}"></td><td><button class=delete-btn data-table-delete="${index}">🗑</button></td>`;
+        ['a2-name','a2-birth','a2-hobby','a2-memo'].forEach((cls,col)=>tr.querySelector('.'+cls).addEventListener('input',e=>{activity2Rows[index][col]=e.target.value;sync();})); }
+      body.appendChild(tr);
     });
-    const listRows = [
-      [value('list1a'), value('list1b')],
-      [value('list2a'), value('list2b')]
-    ];
-    const tableRows = [
-      [value('table1name'),value('table1birth'),value('table1hobby'),value('table1memo')],
-      [value('table2name'),value('table2birth'),value('table2hobby'),value('table2memo')],
-      [value('table3name'),value('table3birth'),value('table3hobby'),value('table3memo')]
-    ];
-    const experienceRows = [
-      [value('exp1month'),value('exp1place'),value('exp1transport'),value('exp1purpose')],
-      [value('exp2month'),value('exp2place'),value('exp2transport'),value('exp2purpose')]
-    ];
-    return {
-      grade:'1', className:value('className'), number:value('studentNo'), name:value('studentName'),
-      blanks, listRows, tableRows, experienceRows,
-      structure: root.querySelector('.choice-buttons .selected')?.dataset.structure || '표',
-      selfChecks:{q1:value('check1'),q2:value('check2'),q3:value('check3')},
-      page: back.classList.contains('hidden') ? 1 : 2,
-      score:0,
-      timestamp:new Date().toISOString()
-    };
+    body.querySelectorAll('[data-table-delete]').forEach(btn=>btn.addEventListener('click',()=>{const i=Number(btn.dataset.tableDelete);if(i===0)return;activity2Rows.splice(i,1);renderActivity2();sync();}));
   }
 
-  function sync() { setStateValue('payload', collect()); }
-
-  function setPage(page) {
-    front.classList.toggle('hidden', page !== 1);
-    back.classList.toggle('hidden', page !== 2);
-    setStateValue('page', page);
-    setTimeout(() => window.scrollTo({top:0, behavior:'smooth'}), 0);
-    resize();
+  function editableInput(value, cls, idx, col) { return `<input class="${cls}" data-idx="${idx}" data-col="${col}" value="${esc(value||'')}">`; }
+  function bindModelInputs(scope,model){
+    scope.querySelectorAll('input[data-idx][data-col]').forEach(el=>el.addEventListener('input',e=>{const i=Number(e.target.dataset.idx),c=Number(e.target.dataset.col);model[i][c]=e.target.value;sync();}));
+    scope.querySelectorAll('[data-model-delete]').forEach(btn=>btn.addEventListener('click',()=>{const i=Number(btn.dataset.modelDelete);if(i===0)return;model.splice(i,1);renderStructure(currentStructure);sync();}));
   }
-
-  root.querySelectorAll('[data-go]').forEach(btn => {
-    btn.addEventListener('click', () => setPage(Number(btn.dataset.go)));
-  });
 
   function renderStructure(type) {
-    const output = root.querySelector('#structureOutput');
-    const table = output.querySelector('.experience-table');
-    const oldList = output.querySelector('.simple-list-view');
-    const oldDiag = output.querySelector('.simple-diagram-view');
-    if (oldList) oldList.remove();
-    if (oldDiag) oldDiag.remove();
-
-    if (type === '표') {
-      output.querySelector('.output-title').textContent = '[ 표(Table)로 구조화한 체험학습 계획 ] (1번 행 샘플)';
-      table.style.display = 'table';
-    } else if (type === '목록') {
-      table.style.display = 'none';
-      output.querySelector('.output-title').textContent = '[ 목록(List)으로 구조화한 체험학습 계획 ]';
-      const div = document.createElement('div');
-      div.className = 'simple-list-view';
-      div.innerHTML = '<div>① 4월 - 경복궁, 창덕궁, 종묘 - 지하철 3호선 - 봄꽃 감상 및 역사 탐방</div><div>② 5월 - 덕수궁 - 지하철 2호선 - 가족과 함께 미술관 체험</div><div>③ 6월 - 전쟁기념관, 국립중앙박물관 - 지하철 4호선 - 선조들의 얼을 기리는 역사 탐방</div>';
-      output.appendChild(div);
+    currentStructure=type;
+    const output=root.querySelector('#structureOutput'), editor=root.querySelector('#experienceEditor'), title=output.querySelector('.output-title');
+    editor.innerHTML='';
+    if(type==='목록'){
+      title.textContent='[ 목록(List)으로 구조화한 체험학습 계획 ]';
+      const wrap=document.createElement('div');wrap.className='plan-list';
+      wrap.innerHTML='<div class="editor-note">1번 항목은 샘플입니다. 2번부터 학생이 직접 입력하고 필요한 만큼 항목을 추가하세요.</div>';
+      experienceListRows.forEach((row,index)=>{const r=document.createElement('div');r.className='plan-list-row';
+        if(index===0) r.innerHTML=`<div class=row-num>1.</div><div class=sample-cell>${esc(row[0])}</div><div class=sample-cell>${esc(row[1])}</div><div class=sample-cell>${esc(row[2])}</div><div class=sample-cell>${esc(row[3])}</div><button class=delete-btn>—</button>`;
+        else r.innerHTML=`<div class=row-num>${index+1}.</div>${editableInput(row[0],'plan-input',index,0)}${editableInput(row[1],'plan-input',index,1)}${editableInput(row[2],'plan-input',index,2)}${editableInput(row[3],'plan-input',index,3)}<button class=delete-btn data-model-delete="${index}">🗑</button>`;
+        wrap.appendChild(r);});
+      const add=document.createElement('button');add.className='add-row-btn';add.textContent='＋ 목록 항목 추가';wrap.appendChild(add);editor.appendChild(wrap);bindModelInputs(editor,experienceListRows);add.addEventListener('click',()=>{experienceListRows.push(['','','','']);renderStructure('목록');sync();});
+    } else if(type==='표'){
+      title.textContent='[ 표(Table)로 구조화한 체험학습 계획 ]';
+      const wrap=document.createElement('div');wrap.innerHTML='<div class=editor-note>1번 행은 샘플입니다. 2번부터 학생이 직접 채우고 필요한 만큼 행을 추가하세요.</div>';
+      const table=document.createElement('table');table.className='plan-table';table.innerHTML='<thead><tr><th>일정(월)</th><th>방문 목적지(장소)</th><th>이용 교통수단</th><th>체험 목적 및 세부 내용</th><th class=delete-col>삭제</th></tr></thead><tbody></tbody>';
+      const body=table.querySelector('tbody');
+      experienceTableRows.forEach((row,index)=>{const tr=document.createElement('tr');if(index===0){tr.className='sample-row';tr.innerHTML=`<td>${esc(row[0])}</td><td>${esc(row[1])}</td><td>${esc(row[2])}</td><td>${esc(row[3])}</td><td>—</td>`;}else{tr.innerHTML=`<td>${editableInput(row[0],'plan-table-input',index,0)}</td><td>${editableInput(row[1],'plan-table-input',index,1)}</td><td>${editableInput(row[2],'plan-table-input',index,2)}</td><td>${editableInput(row[3],'plan-table-input',index,3)}</td><td><button class=delete-btn data-model-delete="${index}">🗑</button></td>`;}body.appendChild(tr);});
+      wrap.appendChild(table);const add=document.createElement('button');add.className='add-row-btn green-add';add.textContent='＋ 표 행 추가';wrap.appendChild(add);editor.appendChild(wrap);bindModelInputs(editor,experienceTableRows);add.addEventListener('click',()=>{experienceTableRows.push(['','','','']);renderStructure('표');sync();});
     } else {
-      table.style.display = 'none';
-      output.querySelector('.output-title').textContent = '[ 다이어그램(노선망)으로 구조화한 체험학습 계획 ]';
-      const div = document.createElement('div');
-      div.className = 'simple-diagram-view';
-      div.innerHTML = '<div class="diag-line"><span>4월</span><b>경복궁 · 창덕궁 · 종묘</b><em>3호선</em></div><div class="diag-line"><span>5월</span><b>덕수궁</b><em>2호선</em></div><div class="diag-line"><span>6월</span><b>전쟁기념관 · 국립중앙박물관</b><em>4호선</em></div>';
-      output.appendChild(div);
+      title.textContent='[ 다이어그램(노선망)으로 구조화한 체험학습 계획 ]';
+      const wrap=document.createElement('div');wrap.className='plan-diagram';const note=document.createElement('div');note.className='editor-note';note.textContent='1번은 샘플입니다. 2번부터 학생이 직접 노드를 만들고 필요한 만큼 추가하세요.';wrap.appendChild(note);
+      experienceDiagramRows.forEach((row,index)=>{const r=document.createElement('div');r.className='plan-diagram-row';
+        r.innerHTML=`<div class=plan-month-node>${index===0?esc(row[0]):editableInput(row[0],'plan-input',index,0)}</div><div class=plan-line></div><div class=plan-node-card>${index===0?`<div class=sample-cell>${esc(row[1])}</div><div class=sample-cell>${esc(row[2])}</div><div class=sample-cell>${esc(row[3])}</div>`:`${editableInput(row[1],'plan-input',index,1)}${editableInput(row[2],'plan-input',index,2)}${editableInput(row[3],'plan-input',index,3)}`}</div><button class=delete-btn data-model-delete="${index}">${index===0?'—':'🗑'}</button>`;
+        wrap.appendChild(r);});
+      const add=document.createElement('button');add.className='add-row-btn';add.textContent='＋ 다이어그램 항목 추가';wrap.appendChild(add);editor.appendChild(wrap);bindModelInputs(editor,experienceDiagramRows);add.addEventListener('click',()=>{experienceDiagramRows.push(['','','','']);renderStructure('다이어그램');sync();});
     }
-    resize();
   }
 
-  root.querySelectorAll('.choice-buttons button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      root.querySelectorAll('.choice-buttons button').forEach(b => b.classList.remove('selected'));
-      btn.classList.add('selected');
-      renderStructure(btn.dataset.structure);
-      sync();
-    });
+  function collect(){
+    const blanks={};root.querySelectorAll('.drop[data-id]').forEach(el=>blanks[el.dataset.id]=el.textContent.trim());
+    return {grade:'1',className:value('className'),number:value('studentNo'),name:value('studentName'),blanks,
+      listRows:clone(activity1Rows),tableRows:clone(activity2Rows),experienceListRows:clone(experienceListRows),experienceTableRows:clone(experienceTableRows),experienceDiagramRows:clone(experienceDiagramRows),experienceRows:clone(experienceTableRows),structure:currentStructure,
+      selfChecks:{q1:value('check1'),q2:value('check2'),q3:value('check3')},page:currentPage,score:0,timestamp:new Date().toISOString()};
+  }
+  function sync(){setStateValue('payload',collect());}
+  function setPage(page){currentPage=page;front.classList.toggle('hidden',page!==1);back.classList.toggle('hidden',page!==2);setStateValue('page',page);window.scrollTo({top:0,behavior:'smooth'});sync();}
+
+  const bank=root.querySelector('#wordBank');if(bank&&!bank.dataset.ready){words.forEach(w=>addWord(bank,w));bank.dataset.ready='1';}
+  const bank2=root.querySelector('#page2Bank');if(bank2&&!bank2.dataset.ready){page2Words.forEach(w=>addWord(bank2,w));bank2.dataset.ready='1';}
+  root.querySelectorAll('.drop').forEach(bindDrop);
+  root.querySelectorAll('input[type="checkbox"]').forEach(el=>el.addEventListener('change',sync));
+
+  renderActivity1();renderActivity2();renderStructure(currentStructure);
+
+  if(initial.className!==undefined)root.querySelector('#className').value=initial.className||'1';
+  if(initial.number!==undefined)root.querySelector('#studentNo').value=initial.number||'';
+  if(initial.name!==undefined)root.querySelector('#studentName').value=initial.name||'';
+  const initialBlanks=initial.blanks||{};
+  root.querySelectorAll('.drop[data-id]').forEach(el=>{const v=initialBlanks[el.dataset.id];if(v)el.textContent=v;updateBlankStatus(el,true);});
+  if(initial.selfChecks){root.querySelector('#check1').checked=!!initial.selfChecks.q1;root.querySelector('#check2').checked=!!initial.selfChecks.q2;root.querySelector('#check3').checked=!!initial.selfChecks.q3;}
+
+  root.querySelectorAll('[data-go]').forEach(btn=>btn.addEventListener('click',()=>setPage(Number(btn.dataset.go))));
+  root.querySelectorAll('.choice-buttons button').forEach(btn=>btn.addEventListener('click',()=>{root.querySelectorAll('.choice-buttons button').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected');renderStructure(btn.dataset.structure);sync();}));
+  root.querySelector(`.choice-buttons button[data-structure="${currentStructure}"]`)?.classList.add('selected');
+  root.querySelector('#addListBtn')?.addEventListener('click',()=>{activity1Rows.push(['','']);renderActivity1();sync();});
+  root.querySelector('#addTableBtn')?.addEventListener('click',()=>{activity2Rows.push(['','','','']);renderActivity2();sync();});
+
+  root.querySelector('#gradeBtn').addEventListener('click',()=>{
+    let score=0;root.querySelectorAll('.drop[data-id]').forEach(el=>{if(updateBlankStatus(el,true))score++;});
+    const payload=collect();payload.score=score;setStateValue('payload',payload);setTriggerValue('save',payload);
+    root.querySelector('#scoreText').textContent=`빈칸 ${score} / ${Object.keys(answers).length} 정답 · 맞으면 초록, 틀리거나 비어 있으면 빨간색으로 표시됩니다.`;
+  });
+  root.querySelector('#clearBtn').addEventListener('click',()=>{
+    root.querySelectorAll('.drop').forEach(el=>{el.textContent='';el.classList.remove('correct','dragover','selected-drop');el.classList.add('wrong');});
+    root.querySelectorAll('input').forEach(el=>{if(el.id==='className')el.value='1';else if(el.type==='checkbox')el.checked=false;else el.value='';});
+    activity1Rows=[['아침 환기 및 창문 열기 (샘플)','매일 등교 직후 8:30 창문 개방']];activity2Rows=[['김민준(샘플)','03월 15일','축구, 코딩','1번 / 체육부장']];
+    experienceListRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];experienceTableRows=[['4월 (예시)','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];experienceDiagramRows=[['4월','경복궁, 창덕궁, 종묘','지하철 3호선','봄꽃 감상 및 역사 탐방']];currentStructure='표';
+    renderActivity1();renderActivity2();renderStructure('표');root.querySelectorAll('.choice-buttons button').forEach(b=>b.classList.remove('selected'));root.querySelector('.choice-buttons button[data-structure="표"]')?.classList.add('selected');root.querySelector('#scoreText').textContent='';sync();
   });
 
-  root.querySelector('#gradeBtn').addEventListener('click', () => {
-    let score = 0;
-    root.querySelectorAll('.drop[data-id]').forEach(el => {
-      const ok = norm(el.textContent) === norm(answers[el.dataset.id]);
-      el.classList.remove('correct','wrong');
-      el.classList.add(ok ? 'correct' : 'wrong');
-      if (ok) score += 1;
-    });
-    const payload = collect();
-    payload.score = score;
-    setStateValue('payload', payload);
-    setTriggerValue('save', payload);
-    root.querySelector('#scoreText').textContent = `빈칸 ${score} / ${Object.keys(answers).length} 정답 · 자동 채점 결과 저장 요청됨`;
-    resize();
-  });
-
-  root.querySelector('#clearBtn').addEventListener('click', () => {
-    root.querySelectorAll('.drop').forEach(el => {
-      if (el.dataset.id === '11') el.textContent = '';
-      if (el.dataset.id === '12') el.textContent = '';
-      if (el.dataset.id === '13') el.textContent = '';
-      if (!['11','12','13'].includes(el.dataset.id)) el.textContent = '';
-      el.classList.remove('correct','wrong','dragover');
-    });
-    root.querySelectorAll('input').forEach(el => {
-      if (el.id === 'className') el.value = '1';
-      else if (el.type === 'checkbox') el.checked = false;
-      else el.value = '';
-    });
-    root.querySelectorAll('.choice-buttons button').forEach(b=>b.classList.remove('selected'));
-    root.querySelector('.choice-buttons button[data-structure="표"]').classList.add('selected');
-    renderStructure('표');
-    root.querySelector('#scoreText').textContent = '';
-    sync();
-  });
-
-  // Python에서 직전 저장 상태가 전달된 경우, 비어 있는 입력만 복원합니다.
-  const initial = data?.initial || {};
-  if (initial.className && !root.querySelector('#className').value) root.querySelector('#className').value = initial.className;
-  if (initial.number && !root.querySelector('#studentNo').value) root.querySelector('#studentNo').value = initial.number;
-  if (initial.name && !root.querySelector('#studentName').value) root.querySelector('#studentName').value = initial.name;
-  const initialBlanks = initial.blanks || {};
-  root.querySelectorAll('.drop[data-id]').forEach(el => {
-    const v = initialBlanks[el.dataset.id];
-    if (v && !el.textContent.trim()) el.textContent = v;
-  });
-
-  const initialPage = initial.page || 1;
-  setPage(initialPage);
-  sync();
-  resize();
-
-  return () => {};
+  setPage(currentPage);sync();return ()=>{};
 }
 '''
 
@@ -727,7 +704,12 @@ worksheet_component = st.components.v2.component(
 if "worksheet_data" not in st.session_state:
     st.session_state.worksheet_data = {
         "grade":"1", "className":"1", "number":"", "name":"", "blanks":{},
-        "listRows":[], "tableRows":[], "experienceRows":[], "structure":"표",
+        "listRows":[["아침 환기 및 창문 열기 (샘플)","매일 등교 직후 8:30 창문 개방"]],
+        "tableRows":[["김민준(샘플)","03월 15일","축구, 코딩","1번 / 체육부장"]],
+        "experienceListRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+        "experienceTableRows":[["4월 (예시)","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+        "experienceDiagramRows":[["4월","경복궁, 창덕궁, 종묘","지하철 3호선","봄꽃 감상 및 역사 탐방"]],
+        "experienceRows":[], "structure":"표",
         "selfChecks":{"q1":False,"q2":False,"q3":False}, "page":1, "score":0
     }
 
