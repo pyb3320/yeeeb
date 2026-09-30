@@ -16,6 +16,8 @@ import streamlit as st
 st.set_page_config(page_title="2026 서라벌 정보", page_icon="📘", layout="wide", initial_sidebar_state="collapsed")
 
 SPREADSHEET_TITLE = "2026_서라벌_정보"
+# Google Sheets 주소는 Secrets에 넣지 않고 코드에 고정합니다.
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1phUIj-pYwo5kWrVOKPJHF3R5UazmGqgjlVbWo1CD_7Q/edit?gid=0#gid=0"
 SUBMISSION_SHEET = "제출기록"
 SUMMARY_SHEET = "학생별현황"
 ACTIVITY_SHEETS = {
@@ -135,32 +137,14 @@ def ensure_worksheets(sh):
 
 
 def get_spreadsheet():
-    """Secrets에 지정된 Google Spreadsheet를 열고 필요한 탭을 준비합니다."""
+    """코드에 지정된 Google Spreadsheet를 열고 필요한 탭을 준비합니다."""
     gc = get_google_client()
-    cfg = _secret_dict("google_sheet")
-    if not cfg:
-        raise RuntimeError(
-            "Streamlit Secrets에 [google_sheet]가 없습니다. "
-            "spreadsheet_url 또는 spreadsheet_id를 넣어 주세요."
-        )
 
-    url = str(cfg.get("spreadsheet_url", "")).strip()
-    key = str(cfg.get("spreadsheet_id", "")).strip()
-
-    if url:
-        # URL 자체에서 ID가 추출 가능한지 먼저 확인합니다.
-        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-        if not m:
-            raise RuntimeError(
-                "spreadsheet_url 형식이 올바르지 않습니다. "
-                "Google Sheets 주소를 /edit까지 포함해 그대로 넣어 주세요."
-            )
-        key = m.group(1)
-
-    if not key:
-        raise RuntimeError(
-            "[google_sheet]에 spreadsheet_url 또는 spreadsheet_id가 없습니다."
-        )
+    url = SPREADSHEET_URL.strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if not m:
+        raise RuntimeError("코드에 설정된 Google Sheets URL 형식이 올바르지 않습니다.")
+    key = m.group(1)
 
     service_email = str(
         _secret_dict("gcp_service_account").get("client_email", "")
@@ -174,15 +158,22 @@ def get_spreadsheet():
             f"현재 앱이 사용하는 서비스 계정: {service_email or '확인할 수 없음'}\n\n"
             "Google Sheets에서 [공유] → 위 서비스 계정 이메일을 추가하고 "
             "[편집자] 권한을 주세요. 또한 Google Sheets API와 Google Drive API가 "
-            "해당 Google Cloud 프로젝트에서 사용 설정되어 있어야 합니다."
+            "해당 Google Cloud 프로젝트에서 사용 설정되어 있어야 합니다.\n\n"
+            f"연결 대상: {SPREADSHEET_URL}"
         ) from exc
     except Exception as exc:
         raise RuntimeError(
-            f"Google Sheets 열기에 실패했습니다: {exc}"
+            f"Google Sheets 열기에 실패했습니다: {exc}\n연결 대상: {SPREADSHEET_URL}"
         ) from exc
 
-    # 기존 파일명을 강제로 바꾸지 않습니다. 사용자가 만든 시트를 그대로 사용합니다.
     try:
+        # 문서 제목은 2026_서라벌_정보로 맞추되,
+        # 제목 변경 권한이 없더라도 데이터 저장 자체는 계속 시도합니다.
+        if getattr(sh, "title", "") != SPREADSHEET_TITLE:
+            try:
+                sh.update_title(SPREADSHEET_TITLE)
+            except Exception:
+                pass
         ensure_worksheets(sh)
     except PermissionError as exc:
         raise RuntimeError(
