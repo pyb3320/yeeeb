@@ -43,7 +43,12 @@ ANSWERS = {
     "10": "점, 선, 도형",
     "11": "소프트웨어 개발 전문가",
     "12": "시스템 SW 개발자",
-    "13": "응용 SW 개발자",
+    "13": "운영체제 프로그래머",
+    "14": "임베디드 프로그래머",
+    "15": "응용 SW 개발자",
+    "16": "응용 SW 프로그래머",
+    "17": "네트워크 프로그래머",
+    "18": "컴퓨터 및 모바일 게임 프로그래머",
 }
 
 
@@ -265,27 +270,51 @@ HTML = r'''
       <div class="page2-bank" id="page2Bank"><span class="page2-label">단어 보관함</span></div>
 
       <div class="tree">
-        <div class="tree-node root-node">
-          <div class="node-label">최상위 분류</div>
-          <span class="drop blank" data-id="11" data-answer="소프트웨어 개발 전문가" contenteditable="true" spellcheck="false"></span>
-        </div>
-        <div class="tree-connector"></div>
-        <div class="tree-children">
-          <div class="branch">
-            <div class="branch-node">
-              <div class="node-label">분류 1 (하위 시스템)</div>
-              <span class="drop blank" data-id="12" data-answer="시스템 SW 개발자" contenteditable="true" spellcheck="false"></span>
-            </div>
-            <div class="branch-line"></div>
-            <div class="leaf-row two-leaf"><div class="leaf">운영체제 프로그래머</div><div class="leaf">임베디드 프로그래머</div></div>
+        <div class="tree-level top-level">
+          <div class="hierarchy-node root-hierarchy">
+            <div class="node-label">최상위 분류</div>
+            <span class="drop blank hierarchy-drop" data-id="11" data-answer="소프트웨어 개발 전문가" contenteditable="true" spellcheck="false"></span>
           </div>
-          <div class="branch">
-            <div class="branch-node purple-node">
-              <div class="node-label">분류 2 (하위 응용)</div>
-              <span class="drop blank" data-id="13" data-answer="응용 SW 개발자" contenteditable="true" spellcheck="false"></span>
+        </div>
+        <div class="hierarchy-main-line"></div>
+        <div class="tree-level branch-level">
+          <div class="hierarchy-branch system-branch">
+            <div class="hierarchy-node">
+              <div class="node-label">분류 1 · 시스템</div>
+              <span class="drop blank hierarchy-drop" data-id="12" data-answer="시스템 SW 개발자" contenteditable="true" spellcheck="false"></span>
             </div>
-            <div class="branch-line purple-line"></div>
-            <div class="leaf-row three-leaf"><div class="leaf">응용 SW 프로그래머</div><div class="leaf">네트워크 프로그래머</div><div class="leaf">컴퓨터 및 모바일 게임 프로그래머</div></div>
+            <div class="child-line"></div>
+            <div class="child-grid two-child">
+              <div class="leaf hierarchy-leaf">
+                <div class="node-label">하위 직무</div>
+                <span class="drop blank leaf-drop" data-id="13" data-answer="운영체제 프로그래머" contenteditable="true" spellcheck="false"></span>
+              </div>
+              <div class="leaf hierarchy-leaf">
+                <div class="node-label">하위 직무</div>
+                <span class="drop blank leaf-drop" data-id="14" data-answer="임베디드 프로그래머" contenteditable="true" spellcheck="false"></span>
+              </div>
+            </div>
+          </div>
+          <div class="hierarchy-branch application-branch">
+            <div class="hierarchy-node purple-hierarchy">
+              <div class="node-label">분류 2 · 응용</div>
+              <span class="drop blank hierarchy-drop" data-id="15" data-answer="응용 SW 개발자" contenteditable="true" spellcheck="false"></span>
+            </div>
+            <div class="child-line purple-child-line"></div>
+            <div class="child-grid three-child">
+              <div class="leaf hierarchy-leaf purple-leaf">
+                <div class="node-label">하위 직무</div>
+                <span class="drop blank leaf-drop" data-id="16" data-answer="응용 SW 프로그래머" contenteditable="true" spellcheck="false"></span>
+              </div>
+              <div class="leaf hierarchy-leaf purple-leaf">
+                <div class="node-label">하위 직무</div>
+                <span class="drop blank leaf-drop" data-id="17" data-answer="네트워크 프로그래머" contenteditable="true" spellcheck="false"></span>
+              </div>
+              <div class="leaf hierarchy-leaf purple-leaf">
+                <div class="node-label">하위 직무</div>
+                <span class="drop blank leaf-drop" data-id="18" data-answer="컴퓨터 및 모바일 게임 프로그래머" contenteditable="true" spellcheck="false"></span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -426,22 +455,28 @@ th,td { border:1px solid #b9cbe0; }
 .diagram-guide { text-align:center; color:#4f388a; font-size:12px; font-weight:900; }
 .page2-bank { justify-content:center; align-items:center; margin-bottom:6px; }
 .page2-label { color:#6b7890; font-size:10px; font-weight:700; }
-.tree { padding:3px 0 0; }
-.tree-node { width:42%; min-width:290px; margin:0 auto; text-align:center; }
-.node-label { color:#67748c; font-size:11px; margin-bottom:2px; }
-.root-node .drop { width:100%; min-height:58px; font-size:13px; }
-.tree-connector { width:2px; height:12px; background:#9ba9bd; margin:0 auto; }
-.tree-children { display:grid; grid-template-columns:1fr 1fr; gap:28px; position:relative; }
-.tree-children::before { content:""; position:absolute; left:25%; right:25%; top:0; height:2px; background:#aab9ff; }
-.branch { position:relative; padding-top:10px; }
-.branch-node { border:2px solid #ccd9e8; border-radius:9px; background:#fff; text-align:center; padding:6px 7px 8px; }
-.branch-node .drop { width:100%; min-height:42px; border:0; background:transparent; color:#7e6b99; font-size:13px; }
-.purple-node { border-color:#d8c7ff; }
-.branch-line { height:14px; width:2px; background:#aab9ff; margin:0 auto; }
-.purple-line { background:#d6a9ff; }
-.leaf-row { display:grid; gap:5px; }
-.two-leaf { grid-template-columns:1fr 1fr; } .three-leaf { grid-template-columns:1fr 1fr 1fr; }
-.leaf { border:1px solid #cad6e4; background:#fff; border-radius:5px; padding:7px 4px; text-align:center; font-size:11px; color:#6e7787; }
+.tree { padding:12px 6px 4px; }
+.node-label { color:#68778d; font-size:10px; margin-bottom:3px; font-weight:800; letter-spacing:-.1px; }
+.tree-level { display:flex; justify-content:center; }
+.top-level { position:relative; }
+.hierarchy-node { width:min(330px,90%); border:2px solid #7da8e5; border-radius:12px; background:#fff; padding:8px 10px 10px; text-align:center; box-shadow:0 2px 0 rgba(73,116,173,.06); }
+.root-hierarchy { border-color:#4f91df; background:#f8fbff; }
+.hierarchy-drop { width:100%; min-height:44px; border:1px dashed #96abc4; background:#fff; font-size:13px; color:#27476d; }
+.hierarchy-main-line { width:3px; height:24px; background:#9eb6d4; margin:0 auto; position:relative; }
+.hierarchy-main-line::before { content:""; position:absolute; left:50%; top:0; width:min(72%,620px); height:2px; background:#9eb6d4; transform:translateX(-50%); }
+.branch-level { display:grid; grid-template-columns:1fr 1fr; gap:26px; position:relative; max-width:900px; margin:0 auto; }
+.hierarchy-branch { position:relative; padding-top:14px; }
+.hierarchy-branch::before { content:""; position:absolute; top:0; left:50%; width:2px; height:14px; background:#9eb6d4; }
+.hierarchy-node.purple-hierarchy { border-color:#b59de9; background:#fcfaff; }
+.child-line { height:18px; width:2px; background:#9eb6d4; margin:0 auto; }
+.purple-child-line { background:#baa0e7; }
+.child-grid { position:relative; display:grid; gap:8px; }
+.child-grid::before { content:""; position:absolute; top:0; left:12%; right:12%; height:2px; background:#b7c6d8; }
+.two-child { grid-template-columns:1fr 1fr; }
+.three-child { grid-template-columns:repeat(3,1fr); }
+.hierarchy-leaf { margin-top:11px; min-width:0; border:1px solid #c6d5e5; background:#fff; border-radius:9px; padding:6px; text-align:center; box-shadow:0 1px 0 rgba(50,80,110,.04); }
+.purple-leaf { border-color:#dacff0; }
+.leaf-drop { width:100%; min-height:46px; border:1px dashed #acbdd0; background:#fbfdff; color:#3b526b; font-size:11px; }
 .yellow-box { margin-top:6px; background:#fffdf1; border-color:#f0c83f; padding:9px 11px; font-size:12px; line-height:1.7; }
 .structure-choice { margin-top:6px; padding:7px 9px; background:#eef4f9; display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .choice-buttons { display:flex; gap:5px; flex-wrap:wrap; }
@@ -507,8 +542,12 @@ th,td { border:1px solid #b9cbe0; }
   h1 { font-size:20px; }
   .student-card { white-space:normal; }
   .reason-row { flex-wrap:wrap; }
-  .tree-node { min-width:0; width:62%; }
-  .tree-children { gap:10px; }
+  .branch-level { gap:10px; }
+  .hierarchy-node { width:92%; }
+  .three-child { grid-template-columns:1fr; }
+  .three-child::before { display:none; }
+  .two-child { grid-template-columns:1fr; }
+  .two-child::before { display:none; }
   .structure-choice { align-items:flex-start; flex-direction:column; }
   .note-right { position:static; padding:0 9px 4px; }
   .sheet-footer { flex-wrap:wrap; }
@@ -530,14 +569,16 @@ export default function(component) {
     "1":"데이터", "2":"특성", "3":"정리 및 배열", "4":"통일된 모양",
     "5":"쉽게 찾을", "6":"내용 요소 간의 관계", "7":"효율적으로 관리",
     "8":"기준", "9":"세로줄과 가로줄", "10":"점, 선, 도형",
-    "11":"소프트웨어 개발 전문가", "12":"시스템 SW 개발자", "13":"응용 SW 개발자"
+    "11":"소프트웨어 개발 전문가", "12":"시스템 SW 개발자", "13":"운영체제 프로그래머",
+    "14":"임베디드 프로그래머", "15":"응용 SW 개발자", "16":"응용 SW 프로그래머",
+    "17":"네트워크 프로그래머", "18":"컴퓨터 및 모바일 게임 프로그래머"
   };
 
   const words = [
     '데이터','특성','정리 및 배열','통일된 모양','쉽게 찾을',
     '내용 요소 간의 관계','효율적으로 관리','기준','세로줄과 가로줄','점, 선, 도형'
   ];
-  const page2Words = ['소프트웨어 개발 전문가','시스템 SW 개발자','응용 SW 개발자'];
+  const page2Words = ['네트워크 프로그래머','소프트웨어 개발 전문가','임베디드 프로그래머','응용 SW 프로그래머','시스템 SW 개발자','컴퓨터 및 모바일 게임 프로그래머','운영체제 프로그래머','응용 SW 개발자'];
   const initial = data?.initial || {};
   const clone = v => JSON.parse(JSON.stringify(v));
   const esc = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
