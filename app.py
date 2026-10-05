@@ -102,11 +102,14 @@ def get_google_client():
 
 
 def get_spreadsheet():
-    """고정된 Google Sheets URL을 서비스 계정으로 엽니다."""
+    """고정된 Google Sheets URL을 서비스 계정으로 열고 필요한 탭을 준비합니다."""
     try:
         gc = get_google_client()
         # URL에는 gid, #gid 같은 부가 파라미터가 있어도 gspread가 문서 ID를 추출합니다.
-        return gc.open_by_url(SPREADSHEET_URL)
+        sh = gc.open_by_url(SPREADSHEET_URL)
+        # 학생계정/학생별현황/제출기록/활동지별 탭이 없으면 자동 생성합니다.
+        ensure_worksheets(sh)
+        return sh
     except Exception as exc:
         # gspread는 권한 부족 시 PermissionError로 변환합니다.
         import gspread
