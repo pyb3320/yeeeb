@@ -101,6 +101,39 @@ def get_google_client():
         raise RuntimeError(f"서비스 계정 인증에 실패했습니다: {exc}") from exc
 
 
+def get_spreadsheet():
+    """고정된 Google Sheets URL을 서비스 계정으로 엽니다."""
+    try:
+        gc = get_google_client()
+        # URL에는 gid, #gid 같은 부가 파라미터가 있어도 gspread가 문서 ID를 추출합니다.
+        return gc.open_by_url(SPREADSHEET_URL)
+    except Exception as exc:
+        # gspread는 권한 부족 시 PermissionError로 변환합니다.
+        import gspread
+        from gspread.exceptions import APIError
+
+        email = "확인 불가"
+        try:
+            email = str(_secret_dict("gcp_service_account").get("client_email", "확인 불가"))
+        except Exception:
+            pass
+
+        if isinstance(exc, PermissionError):
+            raise RuntimeError(
+                "Google Sheets 접근 권한이 없습니다.\n\n"
+                f"현재 앱이 사용하는 서비스 계정: {email}\n\n"
+                "Google Sheets에서 [공유] → 위 서비스 계정 이메일을 추가하고 [편집자] 권한을 주세요. "
+                "또한 Google Sheets API가 Google Cloud 프로젝트에서 사용 설정되어 있어야 합니다.\n\n"
+                f"연결 대상: {SPREADSHEET_URL}"
+            ) from exc
+
+        # APIError는 HTTP 상태를 포함해 진단 가능한 메시지를 유지합니다.
+        if isinstance(exc, APIError):
+            raise RuntimeError(f"Google Sheets API 오류: {exc}") from exc
+
+        raise RuntimeError(f"Google Sheets 연결 실패: {exc}") from exc
+
+
 def column_letter(n:int) -> str:
     out=""
     while n:
