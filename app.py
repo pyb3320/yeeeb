@@ -15,11 +15,12 @@ import streamlit as st
 
 st.set_page_config(page_title="2026 서라벌 정보", page_icon="📘", layout="wide", initial_sidebar_state="collapsed")
 
-SPREADSHEET_TITLE = "2026_서라벌_정보"
 # Google Sheets 주소는 Secrets에 넣지 않고 코드에 고정합니다.
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1phUIj-pYwo5kWrVOKPJHF3R5UazmGqgjlVbWo1CD_7Q/edit"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1phUIj-pYwo5kWrVOKPJHF3R5UazmGqgjlVbWo1CD_7Q/edit?gid=0#gid=0"
 SUBMISSION_SHEET = "제출기록"
 SUMMARY_SHEET = "학생별현황"
+ACCOUNT_SHEET = "학생계정"
+DATA_SHEET = "학습데이터"
 ACTIVITY_SHEETS = {
     "활동지1": "활동지1",
     "활동지2": "활동지2",
@@ -116,90 +117,121 @@ def get_or_create_ws(sh, title, rows=2000, cols=60):
 
 
 def ensure_worksheets(sh):
-    headers = ["제출시각","학번","이름","활동지1_퍼센트","활동지2_퍼센트","활동지3_퍼센트","활동지4_퍼센트","전체_퍼센트","빈칸정답수","빈칸총수"]
-    headers += [f"빈칸{i}" for i in range(1,19)]
-    headers += [f"판정{i}" for i in range(1,19)]
-    headers += ["활동4_형태","payload_json"]
-    ws = get_or_create_ws(sh, SUBMISSION_SHEET, cols=len(headers)+2)
-    if ws.row_values(1) != headers:
-        ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
-    s_headers = ["학번","이름","활동지1","활동지2","활동지3","활동지4","최근제출"]
-    sw = get_or_create_ws(sh, SUMMARY_SHEET, cols=10)
-    if sw.row_values(1) != s_headers:
-        sw.update(range_name="A1:G1", values=[s_headers])
-    for title in ACTIVITY_SHEETS.values():
-        aw = get_or_create_ws(sh, title, cols=8)
-        if not aw.row_values(1):
-            aw.append_row(["제출시각","학번","이름","퍼센트","상태","세부내용"], value_input_option="USER_ENTERED")
+    """필요한 Google Sheets 탭을 준비합니다.
+
+    교사가 보는 요약 탭에는 정답/빈칸 원문을 저장하지 않고,
+    학생이 다음 로그인 때 학습지를 복원하는 데 필요한 원본 payload는
+    별도의 학습데이터 탭에 저장합니다.
+    """
+    submission_headers = [
+        "제출시각", "학번", "이름",
+        "활동지1_퍼센트", "활동지2_퍼센트", "활동지3_퍼센트", "활동지4_퍼센트",
+        "전체_퍼센트", "총정답수", "정답대상문항수", "활동4_형태",
+    ]
+    ws = get_or_create_ws(sh, SUBMISSION_SHEET, rows=3000, cols=len(submission_headers) + 2)
+    if ws.row_values(1) != submission_headers:
+        ws.update(range_name=f"A1:{column_letter(len(submission_headers))}1", values=[submission_headers])
+
+    summary_headers = ["학번", "이름", "활동지1", "활동지2", "활동지3", "활동지4", "전체", "최근제출"]
+    sw = get_or_create_ws(sh, SUMMARY_SHEET, rows=1000, cols=12)
+    if sw.row_values(1) != summary_headers:
+        sw.update(range_name=f"A1:{column_letter(len(summary_headers))}1", values=[summary_headers])
+
+    account_headers = ["학번", "이름", "가입일시", "상태"]
+    aw = get_or_create_ws(sh, ACCOUNT_SHEET, rows=1000, cols=8)
+    if aw.row_values(1) != account_headers:
+        aw.update(range_name="A1:D1", values=[account_headers])
+
+    data_headers = [
+        "제출시각", "학번", "이름",
+        "활동지1_퍼센트", "활동지2_퍼센트", "활동지3_퍼센트", "활동지4_퍼센트", "전체_퍼센트",
+        "활동4_형태", "payload_json",
+    ]
+    dw = get_or_create_ws(sh, DATA_SHEET, rows=3000, cols=14)
+    if dw.row_values(1) != data_headers:
+        dw.update(range_name=f"A1:{column_letter(len(data_headers))}1", values=[data_headers])
+    # 학생 답안 원문은 학생 본인 학습지 복원을 위해서만 사용합니다.
+    # Google Sheets의 일반 화면에서는 숨겨 둡니다.
+    try:
+        dw.hide()
+    except Exception:
+        pass
+
+    activity_headers = {
+        "활동지1": ["제출시각", "학번", "이름", "정답수", "전체문항수", "퍼센트"],
+        "활동지2": ["제출시각", "학번", "이름", "작성칸수", "전체작성칸수", "퍼센트"],
+        "활동지3": ["제출시각", "학번", "이름", "정답수", "전체문항수", "퍼센트"],
+        "활동지4": ["제출시각", "학번", "이름", "작성칸수", "전체작성칸수", "퍼센트"],
+    }
+    for key, title in ACTIVITY_SHEETS.items():
+        xw = get_or_create_ws(sh, title, rows=2000, cols=8)
+        headers = activity_headers[key]
+        if xw.row_values(1) != headers:
+            xw.update(range_name="A1:F1", values=[headers])
 
 
-def get_spreadsheet():
-    """코드에 지정된 Google Spreadsheet를 열고 필요한 탭을 준비합니다."""
-    from gspread.exceptions import APIError
-    gc = get_google_client()
-
-    url = SPREADSHEET_URL.strip()
-    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-    if not m:
-        raise RuntimeError("코드에 설정된 Google Sheets URL 형식이 올바르지 않습니다.")
-    key = m.group(1)
-
-    service_email = str(
-        _secret_dict("gcp_service_account").get("client_email", "")
-    ).strip()
+def register_student(student_id: str, student_name: str):
+    """학생 계정을 Google Sheets에 생성합니다. 학번은 4자리 문자열로 관리합니다."""
+    sid = str(student_id).strip()
+    name = str(student_name).strip()
+    if not re.fullmatch(r"\d{4}", sid):
+        return False, "학번은 숫자 4자리로 입력하세요."
+    if not name:
+        return False, "이름을 입력하세요."
 
     try:
-        sh = gc.open_by_key(key)
-    except APIError as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        body = getattr(getattr(exc, "response", None), "text", "")
-        detail = f"HTTP {status}" if status else "Google API 오류"
-        if body:
-            try:
-                detail += " | " + body[:700]
-            except Exception:
-                pass
-        raise RuntimeError(
-            "Google Sheets API 오류가 발생했습니다.\n\n"
-            f"서비스 계정: {service_email or '확인할 수 없음'}\n"
-            f"문서 ID: {key}\n"
-            f"세부 오류: {detail}\n\n"
-            "가장 먼저 확인할 것: Google Sheets [공유]에 위 서비스 계정 이메일이 "
-            "정확히 들어 있고 편집자 권한인지 확인하세요.\n"
-            f"연결 대상: {SPREADSHEET_URL}"
-        ) from exc
-    except PermissionError as exc:
-        raise RuntimeError(
-            "Google Sheets 접근 권한이 없습니다.\n\n"
-            f"서비스 계정: {service_email or '확인할 수 없음'}\n"
-            f"문서 ID: {key}\n\n"
-            "Google Sheets [공유]에 위 서비스 계정을 편집자로 추가했는지 확인하세요.\n"
-            f"연결 대상: {SPREADSHEET_URL}"
-        ) from exc
+        sh = get_spreadsheet()
+        ws = sh.worksheet(ACCOUNT_SHEET)
+        rows = ws.get_all_values()
+        for row in rows[1:]:
+            old_sid = str(row[0]).strip() if row else ""
+            old_name = str(row[1]).strip() if len(row) > 1 else ""
+            if old_sid == sid:
+                if old_name == name:
+                    return True, "이미 만들어진 계정입니다. 이 정보로 바로 로그인할 수 있습니다."
+                return False, "이미 사용 중인 학번입니다. 기존에 등록한 이름으로 로그인하세요."
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ws.append_row([sid, name, now, "사용"], value_input_option="USER_ENTERED")
+        return True, "학생 계정이 만들어졌습니다. 이제 로그인할 수 있습니다."
     except Exception as exc:
-        raise RuntimeError(
-            f"Google Sheets 열기에 실패했습니다: {type(exc).__name__}: {exc}\n"
-            f"연결 대상: {SPREADSHEET_URL}"
-        ) from exc
+        return False, str(exc)
+
+
+def verify_student_login(student_id: str, student_name: str):
+    """학생계정 탭을 기준으로 로그인합니다.
+    기존 버전에서 저장된 제출기록이 있는 학생은 자동으로 계정을 만들어 호환합니다.
+    """
+    sid = str(student_id).strip()
+    name = str(student_name).strip()
+    if not re.fullmatch(r"\d{4}", sid):
+        return False, "학번은 숫자 4자리로 입력하세요."
+    if not name:
+        return False, "이름을 입력하세요."
 
     try:
-        # 문서 제목은 2026_서라벌_정보로 맞추되,
-        # 제목 변경 권한이 없더라도 데이터 저장 자체는 계속 시도합니다.
-        if getattr(sh, "title", "") != SPREADSHEET_TITLE:
-            try:
-                sh.update_title(SPREADSHEET_TITLE)
-            except Exception:
-                pass
-        ensure_worksheets(sh)
-    except PermissionError as exc:
-        raise RuntimeError(
-            "스프레드시트는 열렸지만 탭을 만들거나 수정할 권한이 없습니다. "
-            f"서비스 계정({service_email})에 편집자 권한을 주세요."
-        ) from exc
-    except Exception as exc:
-        raise RuntimeError(f"스프레드시트 탭 설정에 실패했습니다: {exc}") from exc
+        sh = get_spreadsheet()
+        ws = sh.worksheet(ACCOUNT_SHEET)
+        rows = ws.get_all_values()
+        for row in rows[1:]:
+            if row and str(row[0]).strip() == sid:
+                registered_name = str(row[1]).strip() if len(row) > 1 else ""
+                if registered_name == name:
+                    return True, "로그인되었습니다."
+                return False, "학번은 존재하지만 등록된 이름과 다릅니다."
 
-    return sh
+        # 구버전 데이터와의 호환: 기존 제출기록에 동일 학번+이름이 있으면 자동 등록
+        try:
+            old = sh.worksheet(SUBMISSION_SHEET).get_all_values()
+            for row in old[1:]:
+                if len(row) > 2 and str(row[1]).strip() == sid and str(row[2]).strip() == name:
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ws.append_row([sid, name, now, "사용"], value_input_option="USER_ENTERED")
+                    return True, "기존 학습기록을 확인해 계정을 연결했습니다."
+        except Exception:
+            pass
+        return False, "등록된 계정이 없습니다. 먼저 '학생 계정 만들기'에서 계정을 만들어 주세요."
+    except Exception as exc:
+        return False, str(exc)
 
 
 def norm(v:Any) -> str:
@@ -207,86 +239,56 @@ def norm(v:Any) -> str:
 
 
 def calculate_percentages(payload:dict) -> dict:
+    """객관식 빈칸은 정답률, 직접 작성 활동은 작성완료율을 계산합니다."""
     blanks = payload.get("blanks", {}) or {}
-    front = sum(bool(norm(blanks.get(str(i),""))) and norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) for i in range(1,11))
-    diag = sum(bool(norm(blanks.get(str(i),""))) and norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) for i in range(11,19))
-    a1 = round(front/10*100,1)
+    front = sum(
+        bool(norm(blanks.get(str(i), ""))) and
+        norm(blanks.get(str(i), "")) == norm(BLANK_ANSWERS[str(i)])
+        for i in range(1, 11)
+    )
+    diag = sum(
+        bool(norm(blanks.get(str(i), ""))) and
+        norm(blanks.get(str(i), "")) == norm(BLANK_ANSWERS[str(i)])
+        for i in range(11, 19)
+    )
+    a1 = round(front / 10 * 100, 1)
+
     def completion(rows, cols):
-        rows = rows if isinstance(rows,list) else []
-        students = rows[1:] if len(rows)>1 else []
-        if not students: return 0.0
-        total = len(students)*cols
-        filled = sum(bool(str(row[c]).strip()) for row in students for c in range(cols) if c < len(row))
-        return round(filled/total*100,1)
-    a2 = completion(payload.get("listRows",[]), 2)
-    a3 = round(diag/8*100,1)
-    structure = payload.get("structure","표")
-    selected_rows = {"목록":payload.get("experienceListRows",[]), "표":payload.get("experienceTableRows",[]), "다이어그램":payload.get("experienceDiagramRows",[])}.get(structure, payload.get("experienceTableRows",[]))
-    a4 = completion(selected_rows,4)
-    return {"activity1":a1,"activity2":a2,"activity3":a3,"activity4":a4,"overall":round((a1+a2+a3+a4)/4,1)}
+        rows = rows if isinstance(rows, list) else []
+        students = rows[1:] if len(rows) > 1 else []
+        if not students:
+            return 0.0
+        total = len(students) * cols
+        filled = 0
+        for row in students:
+            if not isinstance(row, list):
+                continue
+            for c in range(cols):
+                if c < len(row) and str(row[c]).strip():
+                    filled += 1
+        return round(filled / total * 100, 1)
 
+    a2 = completion(payload.get("listRows", []), 2)
+    a3 = round(diag / 8 * 100, 1)
+    structure = payload.get("structure", "표")
+    selected_rows = {
+        "목록": payload.get("experienceListRows", []),
+        "표": payload.get("experienceTableRows", []),
+        "다이어그램": payload.get("experienceDiagramRows", []),
+    }.get(structure, payload.get("experienceTableRows", []))
+    a4 = completion(selected_rows, 4)
 
-def save_submission(payload:dict):
-    p = calculate_percentages(payload)
-    try:
-        sh = get_spreadsheet()
-    except Exception as exc:
-        return False, str(exc), p
-    try:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sid = str(payload.get("studentId", "")).strip()
-        name = str(payload.get("name", "")).strip()
-        blanks = payload.get("blanks", {}) or {}
-        verdict = ["O" if norm(blanks.get(str(i),"")) == norm(BLANK_ANSWERS[str(i)]) and bool(norm(blanks.get(str(i),""))) else "X" for i in range(1,19)]
-        correct_count = sum(v=="O" for v in verdict)
-        row = [now,sid,name,p["activity1"],p["activity2"],p["activity3"],p["activity4"],p["overall"],correct_count,18]
-        row += [blanks.get(str(i),"") for i in range(1,19)] + verdict
-        row += [payload.get("structure","표"), json.dumps(payload,ensure_ascii=False)]
-        get_or_create_ws(sh,SUBMISSION_SHEET,cols=len(row)+2).append_row(row,value_input_option="USER_ENTERED")
-
-        summary = get_or_create_ws(sh,SUMMARY_SHEET,cols=10)
-        data = summary.get_all_values(); target=None
-        for r_idx, r in enumerate(data[1:], start=2):
-            if r and str(r[0]).strip()==sid: target=r_idx; break
-        srow=[sid,name,f'{p["activity1"]}%',f'{p["activity2"]}%',f'{p["activity3"]}%',f'{p["activity4"]}%',now]
-        if target: summary.update(range_name=f"A{target}:G{target}",values=[srow])
-        else: summary.append_row(srow,value_input_option="USER_ENTERED")
-
-        detail = {
-            "활동지1": f"개념 빈칸 10개 중 {sum(v=="O" for v in verdict[:10])}개 정답",
-            "활동지2": "학생이 직접 만든 목록 입력완료율",
-            "활동지3": f"계층형 다이어그램 빈칸 8개 중 {sum(v=="O" for v in verdict[10:])}개 정답",
-            "활동지4": f"선택 형태 {payload.get('structure','표')} · 직접 작성완료율",
-        }
-        for key,title in ACTIVITY_SHEETS.items():
-            pct_map = {"활동지1": p["activity1"], "활동지2": p["activity2"], "활동지3": p["activity3"], "활동지4": p["activity4"]}
-            get_or_create_ws(sh, title, cols=8).append_row([now, sid, name, f'{pct_map[key]}%', "제출", detail[key]], value_input_option="USER_ENTERED")
-        return True, "제출 및 저장이 완료되었습니다.", p
-    except Exception as exc:
-        return False, f"Google Sheets 저장 오류: {exc}", p
-
-
-def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
-    try:
-        sh = get_spreadsheet()
-    except Exception as exc:
-        st.session_state["sheet_error"] = str(exc)
-        return []
-    try:
-        rows = sh.worksheet(SUBMISSION_SHEET).get_all_values()
-        if len(rows)<=1: return []
-        headers=rows[0]; pi=headers.index("payload_json")
-        result=[]
-        for row in rows[1:]:
-            if len(row)>1 and str(row[1]).strip()==student_id and len(row)>pi and (not student_name or (len(row)>2 and str(row[2]).strip()==student_name.strip())):
-                try: payload=json.loads(row[pi])
-                except Exception: payload={"studentId":student_id,"name":row[2] if len(row)>2 else ""}
-                payload["_saved_at"]=row[0] if row else ""
-                result.append(payload)
-        result.sort(key=lambda x:str(x.get("_saved_at","")), reverse=True)
-        return result
-    except Exception:
-        return []
+    return {
+        "activity1": a1,
+        "activity2": a2,
+        "activity3": a3,
+        "activity4": a4,
+        "overall": round((a1 + a2 + a3 + a4) / 4, 1),
+        "activity1_correct": front,
+        "activity3_correct": diag,
+        "objective_correct": front + diag,
+        "objective_total": 18,
+    }
 
 
 def get_sheet_diagnostic():
@@ -298,11 +300,139 @@ def get_sheet_diagnostic():
         return {"ok": False, "error": str(exc), "url": SPREADSHEET_URL}
 
 
+def save_submission(payload:dict):
+    p = calculate_percentages(payload)
+    try:
+        sh = get_spreadsheet()
+    except Exception as exc:
+        return False, str(exc), p
+
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sid = str(payload.get("studentId", "")).strip()
+        name = str(payload.get("name", "")).strip()
+        structure = payload.get("structure", "표")
+
+        # 1) 교사용 제출기록: 실제 답안/판정은 저장하지 않고 점수와 퍼센트만 저장
+        summary_row = [
+            now, sid, name,
+            f"{p['activity1']}%", f"{p['activity2']}%", f"{p['activity3']}%", f"{p['activity4']}%",
+            f"{p['overall']}%", p["objective_correct"], p["objective_total"], structure,
+        ]
+        get_or_create_ws(sh, SUBMISSION_SHEET, rows=3000, cols=20).append_row(
+            summary_row, value_input_option="USER_ENTERED"
+        )
+
+        # 2) 학생별현황: 최신 점수만 한 줄로 갱신
+        summary = get_or_create_ws(sh, SUMMARY_SHEET, rows=1000, cols=12)
+        data = summary.get_all_values()
+        target = None
+        for r_idx, r in enumerate(data[1:], start=2):
+            if r and str(r[0]).strip() == sid:
+                target = r_idx
+                break
+        srow = [
+            sid, name,
+            f"{p['activity1']}%", f"{p['activity2']}%", f"{p['activity3']}%", f"{p['activity4']}%",
+            f"{p['overall']}%", now,
+        ]
+        if target:
+            summary.update(range_name=f"A{target}:H{target}", values=[srow])
+        else:
+            summary.append_row(srow, value_input_option="USER_ENTERED")
+
+        # 3) 학생 복원용 데이터: 다음 로그인 때 학생이 이전 학습지를 다시 볼 수 있게 payload 보관
+        data_ws = get_or_create_ws(sh, DATA_SHEET, rows=3000, cols=14)
+        data_row = [
+            now, sid, name,
+            f"{p['activity1']}%", f"{p['activity2']}%", f"{p['activity3']}%", f"{p['activity4']}%", f"{p['overall']}%",
+            structure, json.dumps(payload, ensure_ascii=False),
+        ]
+        data_ws.append_row(data_row, value_input_option="USER_ENTERED")
+
+        # 4) 활동지별 탭: 퍼센트 중심으로 저장
+        # 활동지별 탭에도 답안/판정 대신 정답수·작성칸수·퍼센트만 기록합니다.
+        list_rows = payload.get("listRows", []) if isinstance(payload.get("listRows", []), list) else []
+        list_students = list_rows[1:] if len(list_rows) > 1 else []
+        list_total = len(list_students) * 2
+        list_filled = sum(
+            1 for row in list_students if isinstance(row, list) for c in range(2)
+            if c < len(row) and str(row[c]).strip()
+        )
+
+        selected_rows = {
+            "목록": payload.get("experienceListRows", []),
+            "표": payload.get("experienceTableRows", []),
+            "다이어그램": payload.get("experienceDiagramRows", []),
+        }.get(structure, payload.get("experienceTableRows", []))
+        selected_rows = selected_rows if isinstance(selected_rows, list) else []
+        selected_students = selected_rows[1:] if len(selected_rows) > 1 else []
+        selected_total = len(selected_students) * 4
+        selected_filled = sum(
+            1 for row in selected_students if isinstance(row, list) for c in range(4)
+            if c < len(row) and str(row[c]).strip()
+        )
+
+        pct_rows = {
+            "활동지1": [now, sid, name, p["activity1_correct"], 10, f"{p['activity1']}%"],
+            "활동지2": [now, sid, name, list_filled, list_total, f"{p['activity2']}%"],
+            "활동지3": [now, sid, name, p["activity3_correct"], 8, f"{p['activity3']}%"],
+            "활동지4": [now, sid, name, selected_filled, selected_total, f"{p['activity4']}%"],
+        }
+        for key, title in ACTIVITY_SHEETS.items():
+            get_or_create_ws(sh, title, rows=2000, cols=8).append_row(
+                pct_rows[key],
+                value_input_option="USER_ENTERED"
+            )
+
+        return True, "제출 및 저장이 완료되었습니다.", p
+    except Exception as exc:
+        return False, f"Google Sheets 저장 오류: {exc}", p
 
 
+def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
+    """로그인 학생의 이전 학습지 payload를 불러옵니다."""
+    try:
+        sh = get_spreadsheet()
+    except Exception as exc:
+        st.session_state["sheet_error"] = str(exc)
+        raise RuntimeError(str(exc)) from exc
 
-# Google Sheets 연결 테스트는 로그인/제출 단계에서만 필요하므로
-# 앱 시작 시 자동으로 호출하지 않습니다.
+    try:
+        rows = sh.worksheet(DATA_SHEET).get_all_values()
+    except Exception as exc:
+        st.session_state["sheet_error"] = str(exc)
+        raise RuntimeError(f"학생 복원 데이터 탭을 읽을 수 없습니다: {exc}") from exc
+
+    if len(rows) <= 1:
+        return []
+
+    result = []
+    for row in rows[1:]:
+        if len(row) < 10:
+            continue
+        if str(row[1]).strip() != str(student_id).strip():
+            continue
+        if student_name and str(row[2]).strip() != str(student_name).strip():
+            continue
+        try:
+            payload = json.loads(row[9])
+            if not isinstance(payload, dict):
+                continue
+        except Exception:
+            continue
+        payload["_saved_at"] = row[0]
+        payload["_activity_percent"] = {
+            "activity1": row[3] if len(row) > 3 else "-",
+            "activity2": row[4] if len(row) > 4 else "-",
+            "activity3": row[5] if len(row) > 5 else "-",
+            "activity4": row[6] if len(row) > 6 else "-",
+            "overall": row[7] if len(row) > 7 else "-",
+        }
+        result.append(payload)
+
+    result.sort(key=lambda x: str(x.get("_saved_at", "")), reverse=True)
+    return result
 
 
 def empty_payload(sid,name):
@@ -315,52 +445,107 @@ def empty_payload(sid,name):
             "structure":"표","selfChecks":{"q1":False,"q2":False,"q3":False},"page":1,"score":0}
 
 
-# Login state
-for k, v in {"logged_in":False,"student_id":"","student_name":"","history":[],"worksheet_data":{},"loaded_history_index":0}.items():
-    if k not in st.session_state: st.session_state[k]=v
+# ============================================================
+# 로그인 / 계정
+# ============================================================
+for k, v in {
+    "logged_in": False,
+    "student_id": "",
+    "student_name": "",
+    "history": [],
+    "worksheet_data": {},
+    "loaded_history_index": 0,
+    "last_saved_event": "",
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 with st.expander("Google Sheets 연결 상태 확인", expanded=False):
-    st.caption("아래 버튼을 눌렀을 때만 Google Sheets 연결을 테스트합니다.")
+    st.caption("Google Sheets 주소는 app.py에 고정되어 있고, 인증정보만 Streamlit Secrets에서 가져옵니다.")
     if st.button("연결 테스트", key="sheet_test_safe", width="stretch"):
         diag = get_sheet_diagnostic()
         if diag.get("ok"):
-            st.success(f"연결 성공: {diag.get('title')}")
-            st.caption(diag.get("url"))
+            st.success("Google Sheets 연결 성공")
+            st.caption(f"연결된 문서: {diag.get('title') or '(제목 확인 불가)'}")
         else:
             st.error(diag.get("error", "연결 실패"))
 
 
 if not st.session_state.logged_in:
-    st.markdown('<div class="login-card"><div class="login-title">📘 2026 서라벌 정보</div><div class="login-sub">데이터의 구조화와 분석 · 학번(4자리)과 이름으로 로그인하세요.</div></div>', unsafe_allow_html=True)
-    with st.form("login_form"):
-        c1,c2=st.columns(2)
-        sid=c1.text_input("학번 (4자리)", max_chars=4, placeholder="예: 1102")
-        name=c2.text_input("이름", placeholder="예: 홍길동")
-        submit_login=st.form_submit_button("로그인", type="primary", width="stretch")
-    if submit_login:
-        if not re.fullmatch(r"\d{4}",sid.strip()): st.error("학번은 숫자 4자리로 입력하세요.")
-        elif not name.strip(): st.error("이름을 입력하세요.")
-        else:
-            try:
-                history = load_student_submissions(sid.strip(), name.strip())
-            except Exception as exc:
-                st.error(str(exc))
-                st.stop()
-            st.session_state.logged_in=True; st.session_state.student_id=sid.strip(); st.session_state.student_name=name.strip()
-            st.session_state.history=history
-            st.session_state.worksheet_data=history[0] if history else empty_payload(sid.strip(),name.strip())
-            st.session_state.loaded_history_index=0
-            st.rerun()
+    st.markdown(
+        '<div class="login-card">'
+        '<div class="login-title">📘 2026 서라벌 정보</div>'
+        '<div class="login-sub">학생 계정을 만들고, 같은 학번과 이름으로 계속 로그인하여 이전 학습지를 확인하세요.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    login_tab, signup_tab = st.tabs(["🔐 로그인", "✨ 학생 계정 만들기"])
+
+    with login_tab:
+        with st.form("login_form"):
+            c1, c2 = st.columns(2)
+            sid = c1.text_input("학번 (4자리)", max_chars=4, placeholder="예: 1102")
+            name = c2.text_input("이름", placeholder="예: 홍길동")
+            submit_login = st.form_submit_button("로그인", type="primary", width="stretch")
+        if submit_login:
+            ok, message = verify_student_login(sid, name)
+            if not ok:
+                st.error(message)
+            else:
+                try:
+                    history = load_student_submissions(sid.strip(), name.strip())
+                except Exception as exc:
+                    st.error(str(exc))
+                    st.stop()
+                st.session_state.logged_in = True
+                st.session_state.student_id = sid.strip()
+                st.session_state.student_name = name.strip()
+                st.session_state.history = history
+                st.session_state.worksheet_data = history[0] if history else empty_payload(sid.strip(), name.strip())
+                st.session_state.loaded_history_index = 0
+                st.rerun()
+
+    with signup_tab:
+        st.info("학생 계정은 학번 4자리 + 이름으로 만듭니다. 같은 학번은 한 번만 등록할 수 있습니다.")
+        with st.form("signup_form"):
+            c1, c2 = st.columns(2)
+            new_sid = c1.text_input("새 학번 (4자리)", max_chars=4, placeholder="예: 1102")
+            new_name = c2.text_input("이름", placeholder="예: 홍길동")
+            create_account = st.form_submit_button("학생 계정 만들기", type="primary", width="stretch")
+        if create_account:
+            ok, message = register_student(new_sid, new_name)
+            if ok:
+                st.success(message)
+                st.session_state.logged_in = True
+                st.session_state.student_id = new_sid.strip()
+                st.session_state.student_name = new_name.strip()
+                st.session_state.history = []
+                st.session_state.worksheet_data = empty_payload(new_sid.strip(), new_name.strip())
+                st.session_state.loaded_history_index = 0
+                st.rerun()
+            else:
+                st.error(message)
     st.stop()
 
-st.markdown(f'<span class="badge-ok">로그인됨 · {st.session_state.student_id} · {st.session_state.student_name}</span>', unsafe_allow_html=True)
-col_logout, col_refresh = st.columns([1,1])
+st.markdown(
+    f'<span class="badge-ok">로그인됨 · {st.session_state.student_id} · {st.session_state.student_name}</span>',
+    unsafe_allow_html=True,
+)
+col_logout, col_refresh = st.columns([1, 1])
 if col_logout.button("로그아웃", use_container_width=True):
-    st.session_state.logged_in=False; st.session_state.history=[]; st.session_state.worksheet_data={}; st.rerun()
-if col_refresh.button("🔄 이전 기록 새로 불러오기", use_container_width=True):
+    for key, value in [("logged_in", False), ("student_id", ""), ("student_name", ""), ("history", []), ("worksheet_data", {})]:
+        st.session_state[key] = value
+    st.rerun()
+if col_refresh.button("🔄 내 학습기록 새로 불러오기", use_container_width=True):
     try:
-        st.session_state.history=load_student_submissions(st.session_state.student_id, st.session_state.student_name)
-        if st.session_state.history: st.session_state.worksheet_data=st.session_state.history[0]
+        st.session_state.history = load_student_submissions(
+            st.session_state.student_id,
+            st.session_state.student_name,
+        )
+        if st.session_state.history:
+            st.session_state.worksheet_data = st.session_state.history[0]
+            st.session_state.loaded_history_index = 0
         st.rerun()
     except Exception as exc:
         st.error(str(exc))
@@ -1021,47 +1206,92 @@ with st.container():
         else:
             st.warning(message)
 
-# 이전 학습 기록은 별도 탭으로 확인할 수 있습니다.
+# ============================================================
+# 제출 처리
+# ============================================================
+save_payload = getattr(result, "save", None)
+if save_payload:
+    save_payload = dict(save_payload)
+    save_payload["studentId"] = st.session_state.student_id
+    save_payload["number"] = st.session_state.student_id
+    save_payload["name"] = st.session_state.student_name
+
+    save_event = str(save_payload.get("timestamp", ""))
+    # 같은 trigger가 재렌더링될 때 중복 저장하지 않음
+    if save_event and save_event != st.session_state.last_saved_event:
+        st.session_state.last_saved_event = save_event
+        st.session_state.worksheet_data = save_payload
+        ok, message, pcts = save_submission(save_payload)
+        if ok:
+            try:
+                st.session_state.history = load_student_submissions(
+                    st.session_state.student_id,
+                    st.session_state.student_name,
+                )
+            except Exception:
+                pass
+            st.success(message)
+            st.info(
+                f"활동지 1: {pcts['activity1']}% · "
+                f"활동지 2: {pcts['activity2']}% · "
+                f"활동지 3: {pcts['activity3']}% · "
+                f"활동지 4: {pcts['activity4']}% · "
+                f"전체: {pcts['overall']}%"
+            )
+        else:
+            st.error(message)
+
+
+# ============================================================
+# 학생 본인 학습기록
+# - 교사용 시트에는 퍼센트만 표시
+# - 학생 화면에는 이전 기록의 날짜/퍼센트만 표시
+# - 실제 이전 학습지 내용은 '학습지 열기' 버튼으로 복원
+# ============================================================
 st.markdown("---")
 st.subheader("📚 내 학습 기록")
 history = st.session_state.history
+
 if not history:
-    st.info("아직 제출한 기록이 없습니다. 학습지에서 '자동 채점 및 저장'을 눌러 제출하세요.")
+    st.info("아직 제출한 학습지가 없습니다. 학습지를 작성한 뒤 '자동 채점 및 저장'을 눌러 주세요.")
 else:
-    labels=[f"{i+1}. {h.get('_saved_at','')}" for i,h in enumerate(history)]
-    selected=st.selectbox("확인할 제출 기록", labels, index=min(st.session_state.loaded_history_index,len(labels)-1))
-    idx=labels.index(selected); h=history[idx]; p=calculate_percentages(h)
-    m1,m2,m3,m4=st.columns(4)
-    for col,title,val in [(m1,"활동지 1",p['activity1']),(m2,"활동지 2",p['activity2']),(m3,"활동지 3",p['activity3']),(m4,"활동지 4",p['activity4'])]:
-        with col:
-            st.markdown(f'<div class="history-card"><div class="metric-caption">{title}</div><div class="metric-value">{val}%</div></div>',unsafe_allow_html=True)
+    labels = [f"{i+1}회차 · {h.get('_saved_at', '')}" for i, h in enumerate(history)]
+    selected = st.selectbox(
+        "확인할 제출 기록",
+        labels,
+        index=min(st.session_state.loaded_history_index, len(labels)-1),
+        key="history_select",
+    )
+    idx = labels.index(selected)
+    h = history[idx]
+    saved_pct = h.get("_activity_percent", {})
 
-    ht1,ht2,ht3,ht4=st.tabs(["활동지 1","활동지 2","활동지 3","활동지 4"])
-    with ht1:
-        rows=[]
-        for i in range(1,11):
-            ans=str(h.get("blanks",{}).get(str(i),"") or "")
-            ok=bool(ans) and norm(ans)==norm(BLANK_ANSWERS[str(i)])
-            rows.append({"번호":i,"학생 답":ans,"정답 여부":"정답" if ok else "오답/미입력"})
-        st.dataframe(rows,use_container_width=True,hide_index=True)
-    with ht2:
-        st.write("학생이 직접 작성한 목록")
-        st.dataframe(h.get("listRows",[]),use_container_width=True,hide_index=True)
-    with ht3:
-        rows=[]
-        for i in range(11,19):
-            ans=str(h.get("blanks",{}).get(str(i),"") or "")
-            ok=bool(ans) and norm(ans)==norm(BLANK_ANSWERS[str(i)])
-            rows.append({"번호":i-10,"학생 답":ans,"정답 여부":"정답" if ok else "오답/미입력"})
-        st.dataframe(rows,use_container_width=True,hide_index=True)
-    with ht4:
-        structure=h.get("structure","표")
-        model={"목록":h.get("experienceListRows",[]),"표":h.get("experienceTableRows",[]),"다이어그램":h.get("experienceDiagramRows",[])}.get(structure,[])
-        st.write(f"선택한 구조화 형태: **{structure}**")
-        st.dataframe(model,use_container_width=True,hide_index=True)
-        st.caption("활동지 2·4 퍼센트는 학생이 만든 입력칸의 입력완료율이며, 활동지 1·3은 정답률입니다.")
+    ht1, ht2, ht3, ht4 = st.tabs(["활동지 1", "활동지 2", "활동지 3", "활동지 4"])
+    tab_data = [
+        (ht1, "활동지 1", saved_pct.get("activity1", "-"), "객관식 빈칸 정답률"),
+        (ht2, "활동지 2", saved_pct.get("activity2", "-"), "목록 작성완료율"),
+        (ht3, "활동지 3", saved_pct.get("activity3", "-"), "계층형 다이어그램 정답률"),
+        (ht4, "활동지 4", saved_pct.get("activity4", "-"), "체험학습 구조화 작성완료율"),
+    ]
+    for tab, title, pct, desc in tab_data:
+        with tab:
+            st.markdown(
+                f'<div class="history-card">'
+                f'<div class="metric-caption">{title} · {desc}</div>'
+                f'<div class="metric-value">{pct}</div>'
+                f'<div class="metric-caption">제출: {h.get("_saved_at", "-")}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-    if st.button("↩ 선택한 이전 기록을 학습지로 불러오기"):
-        st.session_state.worksheet_data=h
-        st.session_state.loaded_history_index=idx
+    st.markdown("### 전체 기록")
+    st.write(
+        f"제출일시: **{h.get('_saved_at', '-')}** · "
+        f"전체: **{saved_pct.get('overall', '-')}**"
+    )
+    st.caption("이 화면에서는 학생 답안과 O/X 판정을 표시하지 않고 활동지별 정답수·작성률·퍼센트만 보여줍니다.")
+
+    if st.button("📖 선택한 이전 학습지를 화면에 불러오기", type="primary", width="stretch"):
+        st.session_state.worksheet_data = h
+        st.session_state.loaded_history_index = idx
         st.rerun()
