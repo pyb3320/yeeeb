@@ -21,6 +21,7 @@ SUBMISSION_SHEET = "제출기록"
 SUMMARY_SHEET = "학생별현황"
 ACCOUNT_SHEET = "학생계정"
 DATA_SHEET = "학습데이터"
+QUESTION_SHEET = "활동지1문항"
 # 교사용 비밀번호 초기화 코드. Streamlit Secrets의 [app].teacher_reset_code가 있으면 그 값을 우선 사용합니다.
 DEFAULT_TEACHER_RESET_CODE = "2026"
 # 현재 제작된 활동지는 1개만 운영합니다.
@@ -175,12 +176,18 @@ def ensure_worksheets(sh):
         "제출시각", "학번", "이름",
         "빈칸수", "정답수", "퍼센트"
     ]
+    # 학생이 활동지1 빈칸에 넣었던 내용을 문항별로 직접 확인하고 복원하기 위한 탭
+    question_headers = [
+        "제출시각", "학번", "이름",
+        *[f"문항{i}" for i in range(1, len(BLANK_ANSWERS) + 1)]
+    ]
 
     specs = [
         (SUBMISSION_SHEET, submission_headers, 3000, 10, False),
         (SUMMARY_SHEET, summary_headers, 1000, 10, False),
         (ACCOUNT_SHEET, account_headers, 1000, 10, False),
         (DATA_SHEET, data_headers, 3000, 12, True),
+        (QUESTION_SHEET, question_headers, 3000, 30, False),
         (ACTIVITY_SHEETS["활동지1"], activity_headers, 2000, 8, False),
     ]
 
@@ -482,16 +489,26 @@ def save_submission(payload:dict):
             value_input_option="USER_ENTERED"
         )
 
+        # 5) 활동지1문항: 학생이 각 빈칸에 실제로 넣은 내용을 문항별로 저장
+        #    교사가 Google Sheets에서 학생 답안을 확인하거나, 다음 로그인 때 복원할 때 사용
+        question_ws = get_or_create_ws(
+            sh, QUESTION_SHEET, rows=3000, cols=len(BLANK_ANSWERS) + 5
+        )
+        blanks = payload.get("blanks", {}) or {}
+        question_row = [now, sid, name] + [str(blanks.get(str(i), "") or "") for i in range(1, len(BLANK_ANSWERS) + 1)]
+        question_ws.append_row(question_row, value_input_option="USER_ENTERED")
+
         return True, "제출 및 저장이 완료되었습니다.", p
     except Exception as exc:
         return False, f"Google Sheets 저장 오류: {exc}", p
 
 
 def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
-    """로그인 학생의 이전 활동지1 payload를 불러옵니다.
+    """로그인 학생의 이전 활동지1을 불러옵니다.
 
-    새 형식: [제출시각, 학번, 이름, 빈칸수, 정답수, 퍼센트, payload_json]
-    이전 형식도 호환하여 불러옵니다.
+    - '활동지1문항' 탭에서 문항별 실제 입력값을 읽습니다.
+    - '학습데이터' 탭에 전체 학습지 payload가 있으면 함께 복원합니다.
+    - 따라서 예전에 빈칸에 어떤 내용을 넣었는지 그대로 다시 볼 수 있습니다.
     """
     try:
         sh = get_spreadsheet()
@@ -499,64 +516,83 @@ def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
         st.session_state["sheet_error"] = str(exc)
         raise RuntimeError(str(exc)) from exc
 
+    sid = str(student_id).strip()
+    name = str(student_name).strip()
+
+    # 먼저 전체 payload(목록/표/다이어그램 포함)를 가져옵니다. 없으면 빈 학습지에서 시작합니다.
+    payload_by_time: dict[str, dict] = {}
     try:
         rows = sh.worksheet(DATA_SHEET).get_all_values()
+        for row in rows[1:]:
+            if len(row) < 5:
+                continue
+            if str(row[1]).strip() != sid:
+                continue
+            if name and str(row[2]).strip() != name:
+                continue
+            saved_at = str(row[0]).strip()
+            raw_payload = row[6] if len(row) >= 7 else (row[4] if len(row) > 4 else "")
+            if not raw_payload:
+                continue
+            try:
+                payload = json.loads(str(raw_payload))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                payload_by_time[saved_at] = payload
+    except Exception:
+        # 전체 payload 탭을 읽지 못하더라도 활동지1문항 탭으로 빈칸 복원은 시도합니다.
+        payload_by_time = {}
+
+    try:
+        qrows = sh.worksheet(QUESTION_SHEET).get_all_values()
     except Exception as exc:
         st.session_state["sheet_error"] = str(exc)
-        raise RuntimeError(f"학생 복원 데이터 탭을 읽을 수 없습니다: {exc}") from exc
+        raise RuntimeError(f"활동지1문항 탭을 읽을 수 없습니다: {exc}") from exc
 
-    if len(rows) <= 1:
+    if len(qrows) <= 1:
         return []
 
     result = []
-    for row in rows[1:]:
-        if len(row) < 5:
+    for row in qrows[1:]:
+        if len(row) < 3:
             continue
-        if str(row[1]).strip() != str(student_id).strip():
+        if str(row[1]).strip() != sid:
             continue
-        if student_name and str(row[2]).strip() != str(student_name).strip():
+        if name and str(row[2]).strip() != name:
             continue
 
-        saved_at = row[0] if row else ""
-        blank_count = ""
-        correct_count = ""
-        percent = ""
-        raw_payload = ""
+        saved_at = str(row[0]).strip()
+        # 활동지1문항 탭에서 문항1~18을 복원
+        blanks = {}
+        for idx in range(1, len(BLANK_ANSWERS) + 1):
+            col = idx + 2
+            blanks[str(idx)] = str(row[col]).strip() if len(row) > col else ""
 
-        # 새 형식
-        if len(row) >= 7:
-            blank_count = row[3]
-            correct_count = row[4]
-            percent = row[5]
-            raw_payload = row[6]
-        # 이전 형식
+        payload = dict(payload_by_time.get(saved_at, {}))
+        if not payload:
+            payload = empty_payload(sid, name)
         else:
-            percent = row[3] if len(row) > 3 else ""
-            raw_payload = row[4] if len(row) > 4 else ""
+            payload = dict(payload)
 
-        try:
-            if not raw_payload:
-                continue
-            payload = json.loads(str(raw_payload))
-            if not isinstance(payload, dict):
-                continue
-        except Exception:
-            continue
+        payload["studentId"] = sid
+        payload["name"] = name
+        payload["blanks"] = blanks
 
-        # 이전 저장 데이터에는 빈칸수/정답수가 없으므로 payload 기준으로 계산
-        if not str(blank_count).strip() or not str(correct_count).strip():
-            p = calculate_percentages(payload)
-            blank_count = p["activity1_blank_count"]
-            correct_count = p["activity1_correct"]
-            if not str(percent).strip():
-                percent = f"{p['activity1']}%"
-
+        # 이 기록의 점수는 현재 저장된 빈칸으로 다시 계산합니다.
+        p = calculate_percentages(payload)
         payload["_saved_at"] = saved_at
-        payload["_activity_percent"] = {"activity1": percent or "-"}
-        payload["_activity_blank_count"] = blank_count
-        payload["_activity_correct"] = correct_count
+        payload["_activity_percent"] = {"activity1": f"{p['activity1']}%"}
+        payload["_activity_blank_count"] = p["activity1_blank_count"]
+        payload["_activity_correct"] = p["activity1_correct"]
+        payload["score"] = p["activity1_correct"]
         result.append(payload)
 
+    # 같은 저장시각이 중복되면 마지막 기록 하나만 사용
+    unique = {}
+    for item in result:
+        unique[str(item.get("_saved_at", ""))] = item
+    result = list(unique.values())
     result.sort(key=lambda x: str(x.get("_saved_at", "")), reverse=True)
     return result
 
@@ -1428,7 +1464,7 @@ else:
         f"빈칸 **{h.get('_activity_blank_count', len(BLANK_ANSWERS))}개** · "
         f"정답 **{h.get('_activity_correct', h.get('score', '-'))}개**"
     )
-    st.caption("이 화면에서는 학생 답안과 O/X 판정을 표시하지 않고 현재 활동지1의 정답수와 퍼센트만 보여줍니다.")
+    st.caption("학생의 이전 빈칸 입력 내용은 저장된 활동지1문항 기록을 이용해 학습지 화면에 다시 복원합니다. 교사용 현황표에는 정답수와 퍼센트만 표시합니다.")
 
     if st.button("📖 선택한 이전 학습지를 화면에 불러오기", type="primary", width="stretch"):
         st.session_state.worksheet_data = h
