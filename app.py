@@ -21,6 +21,8 @@ SUBMISSION_SHEET = "제출기록"
 SUMMARY_SHEET = "학생별현황"
 ACCOUNT_SHEET = "학생계정"
 DATA_SHEET = "학습데이터"
+# 교사용 비밀번호 초기화 코드. Streamlit Secrets의 [app].teacher_reset_code가 있으면 그 값을 우선 사용합니다.
+DEFAULT_TEACHER_RESET_CODE = "2026"
 # 현재 제작된 활동지는 1개만 운영합니다.
 # 이후 활동지를 추가할 때 이 사전만 확장하면 됩니다.
 ACTIVITY_SHEETS = {
@@ -151,18 +153,13 @@ def get_or_create_ws(sh, title, rows=2000, cols=60):
 
 
 def ensure_worksheets(sh):
-    """필요한 탭을 준비합니다.
-
-    기존 워크시트의 첫 행을 매번 읽어 헤더를 비교하지 않습니다.
-    이전 코드에서 row_values(1) 호출 시 발생하던 Google API 오류를 피하기 위해
-    '존재하면 그대로 사용, 새로 만들었을 때만 헤더 작성' 방식으로 단순화합니다.
-    """
+    """필요한 탭을 준비하고 기존 학생계정 형식을 자동 보정합니다."""
     submission_headers = [
         "제출시각", "학번", "이름", "활동지1_퍼센트",
         "정답수", "전체문항수"
     ]
     summary_headers = ["학번", "이름", "활동지1", "최근제출"]
-    account_headers = ["학번", "이름", "가입일시", "상태"]
+    account_headers = ["학번", "이름", "비밀번호", "가입일시", "상태", "비밀번호변경일시"]
     data_headers = [
         "제출시각", "학번", "이름", "활동지1_퍼센트", "payload_json"
     ]
@@ -171,7 +168,7 @@ def ensure_worksheets(sh):
     specs = [
         (SUBMISSION_SHEET, submission_headers, 3000, 10, False),
         (SUMMARY_SHEET, summary_headers, 1000, 8, False),
-        (ACCOUNT_SHEET, account_headers, 1000, 8, False),
+        (ACCOUNT_SHEET, account_headers, 1000, 10, False),
         (DATA_SHEET, data_headers, 3000, 10, True),
         (ACTIVITY_SHEETS["활동지1"], activity_headers, 2000, 8, False),
     ]
@@ -186,17 +183,66 @@ def ensure_worksheets(sh):
 
         if created:
             ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
-            if should_hide:
-                try:
-                    ws.hide()
-                except Exception:
-                    pass
+        elif title == ACCOUNT_SHEET:
+            # 기존 학생계정 탭도 새 헤더를 사용합니다. 데이터 행은 아래에서 자동 보정합니다.
+            try:
+                existing = ws.get_all_values()
+                ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
+
+                # 이전 버전: [학번, 이름, 가입일시, 상태]
+                # 새 버전:    [학번, 이름, 비밀번호, 가입일시, 상태, 비밀번호변경일시]
+                for r_idx, row in enumerate(existing[1:], start=2):
+                    if not row or not str(row[0]).strip():
+                        continue
+                    # 새 형식은 6칸 이상이고 3열이 비밀번호이므로 그대로 둡니다.
+                    if len(row) >= 6:
+                        continue
+                    sid = str(row[0]).strip()
+                    name = str(row[1]).strip() if len(row) > 1 else ""
+                    joined = str(row[2]).strip() if len(row) > 2 else ""
+                    status = str(row[3]).strip() if len(row) > 3 else "사용"
+                    migrated = [sid, name, "", joined, status or "사용", ""]
+                    ws.update(range_name=f"A{r_idx}:F{r_idx}", values=[migrated])
+            except Exception:
+                # 접근 오류는 get_spreadsheet에서 실제 오류로 처리합니다.
+                raise
+
+        if should_hide:
+            try:
+                ws.hide()
+            except Exception:
+                pass
 
 
-def register_student(student_id: str, student_name: str):
-    """학생 계정을 Google Sheets에 생성합니다. 학번은 4자리 문자열로 관리합니다."""
+def validate_password(password: str) -> str:
+    pw = str(password or "").strip()
+    if not pw:
+        raise ValueError("비밀번호를 입력하세요.")
+    if len(pw) < 4 or len(pw) > 20:
+        raise ValueError("비밀번호는 4~20자리로 입력하세요.")
+    return pw
+
+
+def get_teacher_reset_code() -> str:
+    try:
+        app_secret = _secret_dict("app")
+        code = str(app_secret.get("teacher_reset_code", "")).strip()
+        if code:
+            return code
+    except Exception:
+        pass
+    return DEFAULT_TEACHER_RESET_CODE
+
+
+def register_student(student_id: str, student_name: str, password: str):
+    """학생 계정을 Google Sheets에 생성합니다. 비밀번호는 요청에 따라 평문으로 저장합니다."""
     sid = str(student_id).strip()
     name = str(student_name).strip()
+    try:
+        pw = validate_password(password)
+    except ValueError as exc:
+        return False, str(exc)
+
     if not re.fullmatch(r"\d{4}", sid):
         return False, "학번은 숫자 4자리로 입력하세요."
     if not name:
@@ -211,21 +257,71 @@ def register_student(student_id: str, student_name: str):
             old_name = str(row[1]).strip() if len(row) > 1 else ""
             if old_sid == sid:
                 if old_name == name:
-                    return False, "중복된 학번입니다. 이미 만들어진 학생 계정이 있으므로 [로그인] 탭에서 이 학번과 이름으로 로그인하세요."
-                return False, f"중복된 학번입니다. {sid}번은 이미 다른 이름({old_name})으로 등록되어 있습니다. 기존 등록 정보를 확인하세요."
+                    return False, "중복된 학번입니다. 이미 만들어진 학생 계정이 있습니다. [로그인] 탭에서 로그인하세요."
+                return False, f"중복된 학번입니다. {sid}번은 이미 다른 이름({old_name})으로 등록되어 있습니다."
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ws.append_row([sid, name, now, "사용"], value_input_option="USER_ENTERED")
+        ws.append_row([sid, name, pw, now, "사용", now], value_input_option="USER_ENTERED")
         return True, "학생 계정이 만들어졌습니다. 이제 로그인할 수 있습니다."
     except Exception as exc:
         return False, str(exc)
 
 
-def verify_student_login(student_id: str, student_name: str):
+def verify_student_login(student_id: str, student_name: str, password: str):
     """학생계정 탭을 기준으로 로그인합니다.
-    기존 버전에서 저장된 제출기록이 있는 학생은 자동으로 계정을 만들어 호환합니다.
+
+    학생계정 행이 실제로 존재해야 로그인할 수 있습니다.
+    계정 행을 Google Sheets에서 삭제하면 이전 제출기록이 남아 있어도 로그인할 수 없습니다.
     """
     sid = str(student_id).strip()
     name = str(student_name).strip()
+    pw = str(password or "").strip()
+
+    if not re.fullmatch(r"\d{4}", sid):
+        return False, "학번은 숫자 4자리로 입력하세요."
+    if not name:
+        return False, "이름을 입력하세요."
+    if not pw:
+        return False, "비밀번호를 입력하세요."
+
+    try:
+        sh = get_spreadsheet()
+        ws = sh.worksheet(ACCOUNT_SHEET)
+        rows = ws.get_all_values()
+        for row in rows[1:]:
+            if row and str(row[0]).strip() == sid:
+                registered_name = str(row[1]).strip() if len(row) > 1 else ""
+                registered_password = str(row[2]).strip() if len(row) > 2 else ""
+                status = str(row[4]).strip() if len(row) > 4 else "사용"
+
+                if registered_name != name:
+                    return False, "학번은 존재하지만 등록된 이름과 다릅니다."
+                if status and status != "사용":
+                    return False, "사용할 수 없는 학생 계정입니다. 선생님에게 문의하세요."
+                if not registered_password:
+                    return False, "이 계정에는 비밀번호가 아직 설정되지 않았습니다. 선생님에게 비밀번호 초기화를 요청하세요."
+                if registered_password != pw:
+                    return False, "비밀번호가 올바르지 않습니다."
+                return True, "로그인되었습니다."
+
+        # 중요: 계정을 삭제한 학생은 제출기록이 남아 있어도 자동 재등록하지 않습니다.
+        return False, "등록된 학생 계정이 없습니다. 먼저 '학생 계정 만들기'에서 계정을 만들어 주세요."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def reset_student_password(student_id: str, student_name: str, teacher_code: str, new_password: str):
+    """교사용 초기화 코드로 학생 비밀번호를 변경합니다."""
+    sid = str(student_id).strip()
+    name = str(student_name).strip()
+    code = str(teacher_code or "").strip()
+    try:
+        pw = validate_password(new_password)
+    except ValueError as exc:
+        return False, str(exc)
+
+    if code != get_teacher_reset_code():
+        return False, "교사용 비밀번호 초기화 코드가 올바르지 않습니다."
     if not re.fullmatch(r"\d{4}", sid):
         return False, "학번은 숫자 4자리로 입력하세요."
     if not name:
@@ -235,24 +331,15 @@ def verify_student_login(student_id: str, student_name: str):
         sh = get_spreadsheet()
         ws = sh.worksheet(ACCOUNT_SHEET)
         rows = ws.get_all_values()
-        for row in rows[1:]:
+        for r_idx, row in enumerate(rows[1:], start=2):
             if row and str(row[0]).strip() == sid:
                 registered_name = str(row[1]).strip() if len(row) > 1 else ""
-                if registered_name == name:
-                    return True, "로그인되었습니다."
-                return False, "학번은 존재하지만 등록된 이름과 다릅니다."
-
-        # 구버전 데이터와의 호환: 기존 제출기록에 동일 학번+이름이 있으면 자동 등록
-        try:
-            old = sh.worksheet(SUBMISSION_SHEET).get_all_values()
-            for row in old[1:]:
-                if len(row) > 2 and str(row[1]).strip() == sid and str(row[2]).strip() == name:
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    ws.append_row([sid, name, now, "사용"], value_input_option="USER_ENTERED")
-                    return True, "기존 학습기록을 확인해 계정을 연결했습니다."
-        except Exception:
-            pass
-        return False, "등록된 계정이 없습니다. 먼저 '학생 계정 만들기'에서 계정을 만들어 주세요."
+                if registered_name != name:
+                    return False, "학번은 존재하지만 등록된 이름과 다릅니다."
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ws.update(range_name=f"C{r_idx}:F{r_idx}", values=[[pw, row[3] if len(row) > 3 else now, row[4] if len(row) > 4 else "사용", now]])
+                return True, "비밀번호가 초기화되었습니다. 학생계정 탭에서 현재 비밀번호를 확인할 수 있습니다."
+        return False, "등록된 학생 계정이 없습니다."
     except Exception as exc:
         return False, str(exc)
 
@@ -295,9 +382,32 @@ def get_sheet_diagnostic():
         return {"ok": False, "error": str(exc), "url": SPREADSHEET_URL}
 
 
+def account_is_active(student_id: str, student_name: str) -> bool:
+    """현재 학생 계정이 Google Sheets에 실제로 존재하고 '사용' 상태인지 확인합니다."""
+    try:
+        sh = get_spreadsheet()
+        rows = sh.worksheet(ACCOUNT_SHEET).get_all_values()
+        sid = str(student_id).strip()
+        name = str(student_name).strip()
+        for row in rows[1:]:
+            if not row:
+                continue
+            if str(row[0]).strip() == sid and str(row[1]).strip() == name:
+                status = str(row[4]).strip() if len(row) > 4 else "사용"
+                return not status or status == "사용"
+        return False
+    except Exception:
+        return False
+
+
 def save_submission(payload:dict):
     """학생 답안 원문은 숨김 복원 탭에만 보관하고, 교사용 탭에는 퍼센트만 저장합니다."""
     p = calculate_percentages(payload)
+    sid = str(payload.get("studentId", "")).strip()
+    name = str(payload.get("name", "")).strip()
+    if not account_is_active(sid, name):
+        return False, "학생 계정이 존재하지 않거나 사용 중지되었습니다. 다시 로그인해 주세요.", p
+
     try:
         sh = get_spreadsheet()
     except Exception as exc:
@@ -440,21 +550,22 @@ if not st.session_state.logged_in:
     st.markdown(
         '<div class="login-card">'
         '<div class="login-title">📘 2026 서라벌 정보</div>'
-        '<div class="login-sub">학생 계정을 만들고, 같은 학번과 이름으로 계속 로그인하여 이전 학습지를 확인하세요.</div>'
+        '<div class="login-sub">학생 계정을 만들고, 같은 학번과 이름, 비밀번호로 계속 로그인하여 이전 학습지를 확인하세요.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    login_tab, signup_tab = st.tabs(["🔐 로그인", "✨ 학생 계정 만들기"])
+    login_tab, signup_tab, reset_tab = st.tabs(["🔐 로그인", "✨ 학생 계정 만들기", "🔄 비밀번호 초기화"])
 
     with login_tab:
         with st.form("login_form"):
             c1, c2 = st.columns(2)
             sid = c1.text_input("학번 (4자리)", max_chars=4, placeholder="예: 1102")
             name = c2.text_input("이름", placeholder="예: 홍길동")
+            login_password = c1.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
             submit_login = st.form_submit_button("로그인", type="primary", width="stretch")
         if submit_login:
-            ok, message = verify_student_login(sid, name)
+            ok, message = verify_student_login(sid, name, login_password)
             if not ok:
                 st.error(message)
             else:
@@ -472,14 +583,19 @@ if not st.session_state.logged_in:
                 st.rerun()
 
     with signup_tab:
-        st.info("학생 계정은 학번 4자리 + 이름으로 만듭니다. 같은 학번은 한 번만 등록할 수 있습니다.")
+        st.info("학생 계정은 학번 4자리 + 이름 + 비밀번호로 만듭니다. 같은 학번은 한 번만 등록할 수 있습니다. 계정 정보는 Google Sheets의 '학생계정' 탭에 정리됩니다.")
         with st.form("signup_form"):
             c1, c2 = st.columns(2)
             new_sid = c1.text_input("새 학번 (4자리)", max_chars=4, placeholder="예: 1102")
             new_name = c2.text_input("이름", placeholder="예: 홍길동")
+            new_password = c1.text_input("비밀번호", type="password", placeholder="4~20자리")
+            new_password2 = c2.text_input("비밀번호 확인", type="password", placeholder="한 번 더 입력하세요")
             create_account = st.form_submit_button("학생 계정 만들기", type="primary", width="stretch")
         if create_account:
-            ok, message = register_student(new_sid, new_name)
+            if new_password != new_password2:
+                st.error("비밀번호가 서로 다릅니다.")
+                st.stop()
+            ok, message = register_student(new_sid, new_name, new_password)
             if ok:
                 st.success(message)
                 sid_clean = new_sid.strip()
@@ -499,12 +615,33 @@ if not st.session_state.logged_in:
             else:
                 st.error(message)
                 st.info("이미 계정이 있다면 위의 [🔐 로그인] 탭으로 이동하여 같은 학번과 이름으로 로그인하세요. 로그인하면 저장된 이전 학습지를 자동으로 불러옵니다.")
+    with reset_tab:
+        st.info("비밀번호를 잊은 경우 선생님이 초기화할 수 있습니다. 초기화한 비밀번호는 Google Sheets의 '학생계정' 탭에서 확인할 수 있습니다. 초기화 코드는 Streamlit Secrets의 [app].teacher_reset_code를 권장합니다.")
+        with st.form("reset_password_form"):
+            c1, c2 = st.columns(2)
+            reset_sid = c1.text_input("학번 (4자리)", max_chars=4, placeholder="예: 1102")
+            reset_name = c2.text_input("이름", placeholder="예: 홍길동")
+            reset_code = c1.text_input("교사용 초기화 코드", type="password")
+            reset_pw = c2.text_input("새 비밀번호", type="password", placeholder="4~20자리")
+            reset_pw2 = c1.text_input("새 비밀번호 확인", type="password")
+            reset_submit = st.form_submit_button("비밀번호 초기화", type="primary", width="stretch")
+        if reset_submit:
+            if reset_pw != reset_pw2:
+                st.error("새 비밀번호가 서로 다릅니다.")
+            else:
+                ok, message = reset_student_password(reset_sid, reset_name, reset_code, reset_pw)
+                if ok:
+                    st.success(message)
+                else:
+                    st.error(message)
+
     st.stop()
 
 st.markdown(
     f'<span class="badge-ok">로그인됨 · {st.session_state.student_id} · {st.session_state.student_name}</span>',
     unsafe_allow_html=True,
 )
+
 col_logout, col_refresh = st.columns([1, 1])
 if col_logout.button("로그아웃", use_container_width=True):
     for key, value in [("logged_in", False), ("student_id", ""), ("student_name", ""), ("history", []), ("worksheet_data", {})]:
