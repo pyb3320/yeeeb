@@ -154,22 +154,33 @@ def get_or_create_ws(sh, title, rows=2000, cols=60):
 
 def ensure_worksheets(sh):
     """필요한 탭을 준비하고 기존 학생계정 형식을 자동 보정합니다."""
+    # 현재는 "데이터의 구조화(활동지1)" 한 개만 운영합니다.
+    # 교사용 기록에는 답안 원문/OX 판정 없이 빈칸 수, 정답 수, 퍼센트만 저장합니다.
     submission_headers = [
-        "제출시각", "학번", "이름", "활동지1_퍼센트",
-        "정답수", "전체문항수"
+        "제출시각", "학번", "이름",
+        "활동지1_빈칸수", "활동지1_정답수", "활동지1_퍼센트"
     ]
-    summary_headers = ["학번", "이름", "활동지1", "최근제출"]
+    summary_headers = [
+        "학번", "이름",
+        "활동지1_빈칸수", "활동지1_정답수", "활동지1_퍼센트",
+        "최근제출"
+    ]
     account_headers = ["학번", "이름", "비밀번호", "가입일시", "상태", "비밀번호변경일시"]
     data_headers = [
-        "제출시각", "학번", "이름", "활동지1_퍼센트", "payload_json"
+        "제출시각", "학번", "이름",
+        "활동지1_빈칸수", "활동지1_정답수", "활동지1_퍼센트",
+        "payload_json"
     ]
-    activity_headers = ["제출시각", "학번", "이름", "정답수", "전체문항수", "퍼센트"]
+    activity_headers = [
+        "제출시각", "학번", "이름",
+        "빈칸수", "정답수", "퍼센트"
+    ]
 
     specs = [
         (SUBMISSION_SHEET, submission_headers, 3000, 10, False),
-        (SUMMARY_SHEET, summary_headers, 1000, 8, False),
+        (SUMMARY_SHEET, summary_headers, 1000, 10, False),
         (ACCOUNT_SHEET, account_headers, 1000, 10, False),
-        (DATA_SHEET, data_headers, 3000, 10, True),
+        (DATA_SHEET, data_headers, 3000, 12, True),
         (ACTIVITY_SHEETS["활동지1"], activity_headers, 2000, 8, False),
     ]
 
@@ -183,11 +194,13 @@ def ensure_worksheets(sh):
 
         if created:
             ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
-        elif title == ACCOUNT_SHEET:
+        else:
+            # 현재 버전의 헤더로 통일합니다. 기존 데이터 행은 삭제하지 않습니다.
+            ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
+        if title == ACCOUNT_SHEET:
             # 기존 학생계정 탭도 새 헤더를 사용합니다. 데이터 행은 아래에서 자동 보정합니다.
             try:
                 existing = ws.get_all_values()
-                ws.update(range_name=f"A1:{column_letter(len(headers))}1", values=[headers])
 
                 # 이전 버전: [학번, 이름, 가입일시, 상태]
                 # 새 버전:    [학번, 이름, 비밀번호, 가입일시, 상태, 비밀번호변경일시]
@@ -366,6 +379,7 @@ def calculate_percentages(payload:dict) -> dict:
     return {
         "activity1": pct,
         "activity1_correct": correct,
+        "activity1_blank_count": total,
         "activity1_total": total,
         "overall": pct,
         "objective_correct": correct,
@@ -420,8 +434,8 @@ def save_submission(payload:dict):
 
         # 1) 교사용 제출기록: 답안 원문/OX 판정 없이 퍼센트와 정답수만 저장
         submission_row = [
-            now, sid, name, f"{p['activity1']}%",
-            p["activity1_correct"], p["activity1_total"]
+            now, sid, name,
+            p["activity1_blank_count"], p["activity1_correct"], f"{p['activity1']}%"
         ]
         get_or_create_ws(sh, SUBMISSION_SHEET, rows=3000, cols=10).append_row(
             submission_row, value_input_option="USER_ENTERED"
@@ -436,16 +450,20 @@ def save_submission(payload:dict):
                 target = r_idx
                 break
 
-        srow = [sid, name, f"{p['activity1']}%", now]
+        srow = [
+            sid, name,
+            p["activity1_blank_count"], p["activity1_correct"], f"{p['activity1']}%", now
+        ]
         if target:
-            summary.update(range_name=f"A{target}:D{target}", values=[srow])
+            summary.update(range_name=f"A{target}:F{target}", values=[srow])
         else:
             summary.append_row(srow, value_input_option="USER_ENTERED")
 
         # 3) 학생 복원용 데이터: 다음 로그인 때 예전 학습지 상태를 복원할 때만 사용
         data_ws = get_or_create_ws(sh, DATA_SHEET, rows=3000, cols=10)
         data_row = [
-            now, sid, name, f"{p['activity1']}%",
+            now, sid, name,
+            p["activity1_blank_count"], p["activity1_correct"], f"{p['activity1']}%",
             json.dumps(payload, ensure_ascii=False)
         ]
         data_ws.append_row(data_row, value_input_option="USER_ENTERED")
@@ -457,7 +475,10 @@ def save_submission(payload:dict):
         # 4) 활동지1 탭: 퍼센트 중심
         activity_ws = get_or_create_ws(sh, ACTIVITY_SHEETS["활동지1"], rows=2000, cols=8)
         activity_ws.append_row(
-            [now, sid, name, p["activity1_correct"], p["activity1_total"], f"{p['activity1']}%"],
+            [
+                now, sid, name,
+                p["activity1_blank_count"], p["activity1_correct"], f"{p['activity1']}%"
+            ],
             value_input_option="USER_ENTERED"
         )
 
@@ -467,7 +488,11 @@ def save_submission(payload:dict):
 
 
 def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
-    """로그인 학생의 이전 학습지 payload를 불러옵니다."""
+    """로그인 학생의 이전 활동지1 payload를 불러옵니다.
+
+    새 형식: [제출시각, 학번, 이름, 빈칸수, 정답수, 퍼센트, payload_json]
+    이전 형식도 호환하여 불러옵니다.
+    """
     try:
         sh = get_spreadsheet()
     except Exception as exc:
@@ -491,19 +516,45 @@ def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
             continue
         if student_name and str(row[2]).strip() != str(student_name).strip():
             continue
+
+        saved_at = row[0] if row else ""
+        blank_count = ""
+        correct_count = ""
+        percent = ""
+        raw_payload = ""
+
+        # 새 형식
+        if len(row) >= 7:
+            blank_count = row[3]
+            correct_count = row[4]
+            percent = row[5]
+            raw_payload = row[6]
+        # 이전 형식
+        else:
+            percent = row[3] if len(row) > 3 else ""
+            raw_payload = row[4] if len(row) > 4 else ""
+
         try:
-            raw_payload = str(row[4]).strip()
             if not raw_payload:
                 continue
-            payload = json.loads(raw_payload)
+            payload = json.loads(str(raw_payload))
             if not isinstance(payload, dict):
                 continue
         except Exception:
             continue
-        payload["_saved_at"] = row[0]
-        payload["_activity_percent"] = {
-            "activity1": row[3] if len(row) > 3 else "-",
-        }
+
+        # 이전 저장 데이터에는 빈칸수/정답수가 없으므로 payload 기준으로 계산
+        if not str(blank_count).strip() or not str(correct_count).strip():
+            p = calculate_percentages(payload)
+            blank_count = p["activity1_blank_count"]
+            correct_count = p["activity1_correct"]
+            if not str(percent).strip():
+                percent = f"{p['activity1']}%"
+
+        payload["_saved_at"] = saved_at
+        payload["_activity_percent"] = {"activity1": percent or "-"}
+        payload["_activity_blank_count"] = blank_count
+        payload["_activity_correct"] = correct_count
         result.append(payload)
 
     result.sort(key=lambda x: str(x.get("_saved_at", "")), reverse=True)
@@ -1328,7 +1379,8 @@ if save_payload:
             st.success(message)
             st.info(
                 f"활동지 1: {pcts['activity1']}% · "
-                f"맞힌 개수: {pcts['activity1_correct']} / {pcts['activity1_total']}"
+                f"빈칸 {pcts['activity1_blank_count']}개 · "
+                f"정답 {pcts['activity1_correct']}개"
             )
         else:
             st.error(message)
@@ -1364,7 +1416,7 @@ else:
             f'<div class="history-card">'
             f'<div class="metric-caption">활동지 1 · 데이터의 구조화와 분석</div>'
             f'<div class="metric-value">{saved_pct.get("activity1", "-")}</div>'
-            f'<div class="metric-caption">맞힌 개수: {h.get("score", "- ")} / {len(BLANK_ANSWERS)} · 제출: {h.get("_saved_at", "-")}</div>'
+            f'<div class="metric-caption">빈칸 {h.get("_activity_blank_count", len(BLANK_ANSWERS))}개 · 정답 {h.get("_activity_correct", h.get("score", "-"))}개 · 제출: {h.get("_saved_at", "-")}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1372,7 +1424,9 @@ else:
     st.markdown("### 전체 기록")
     st.write(
         f"제출일시: **{h.get('_saved_at', '-')}** · "
-        f"활동지1: **{saved_pct.get('activity1', '-')}**"
+        f"활동지1: **{saved_pct.get('activity1', '-')}** · "
+        f"빈칸 **{h.get('_activity_blank_count', len(BLANK_ANSWERS))}개** · "
+        f"정답 **{h.get('_activity_correct', h.get('score', '-'))}개**"
     )
     st.caption("이 화면에서는 학생 답안과 O/X 판정을 표시하지 않고 현재 활동지1의 정답수와 퍼센트만 보여줍니다.")
 
