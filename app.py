@@ -211,8 +211,8 @@ def register_student(student_id: str, student_name: str):
             old_name = str(row[1]).strip() if len(row) > 1 else ""
             if old_sid == sid:
                 if old_name == name:
-                    return True, "이미 만들어진 계정입니다. 이 정보로 바로 로그인할 수 있습니다."
-                return False, "이미 사용 중인 학번입니다. 기존에 등록한 이름으로 로그인하세요."
+                    return False, "중복된 학번입니다. 이미 만들어진 학생 계정이 있으므로 [로그인] 탭에서 이 학번과 이름으로 로그인하세요."
+                return False, f"중복된 학번입니다. {sid}번은 이미 다른 이름({old_name})으로 등록되어 있습니다. 기존 등록 정보를 확인하세요."
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ws.append_row([sid, name, now, "사용"], value_input_option="USER_ENTERED")
         return True, "학생 계정이 만들어졌습니다. 이제 로그인할 수 있습니다."
@@ -382,7 +382,10 @@ def load_student_submissions(student_id:str, student_name:str="") -> list[dict]:
         if student_name and str(row[2]).strip() != str(student_name).strip():
             continue
         try:
-            payload = json.loads(row[4])
+            raw_payload = str(row[4]).strip()
+            if not raw_payload:
+                continue
+            payload = json.loads(raw_payload)
             if not isinstance(payload, dict):
                 continue
         except Exception:
@@ -479,15 +482,23 @@ if not st.session_state.logged_in:
             ok, message = register_student(new_sid, new_name)
             if ok:
                 st.success(message)
+                sid_clean = new_sid.strip()
+                name_clean = new_name.strip()
+                try:
+                    history = load_student_submissions(sid_clean, name_clean)
+                except Exception:
+                    history = []
                 st.session_state.logged_in = True
-                st.session_state.student_id = new_sid.strip()
-                st.session_state.student_name = new_name.strip()
-                st.session_state.history = []
-                st.session_state.worksheet_data = empty_payload(new_sid.strip(), new_name.strip())
+                st.session_state.student_id = sid_clean
+                st.session_state.student_name = name_clean
+                st.session_state.history = history
+                st.session_state.worksheet_data = history[0] if history else empty_payload(sid_clean, name_clean)
                 st.session_state.loaded_history_index = 0
+                st.session_state.last_saved_event = ""
                 st.rerun()
             else:
                 st.error(message)
+                st.info("이미 계정이 있다면 위의 [🔐 로그인] 탭으로 이동하여 같은 학번과 이름으로 로그인하세요. 로그인하면 저장된 이전 학습지를 자동으로 불러옵니다.")
     st.stop()
 
 st.markdown(
